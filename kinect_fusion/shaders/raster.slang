@@ -86,8 +86,7 @@ bool intersectCube(in Ray ray, in Bbox bbox, out float3 p1, out float3 p2)
   float tFar = min(min(t2.x, t2.y), t2.z);
 
   
-  if (tNear > tFar || tFar < 0.0)
-  {
+  if (tNear > tFar || tFar < 0.0) {
     return false;
   }
 
@@ -109,32 +108,19 @@ float3 computeVolumeGradient(Sampler3D volume, float3 p, float voxelSize)
 
   return normalize(float3(dx, dy, dz));
 }
-    
-// Traces a ray through a volume by taking multiple steps and sampling the volume texture at each step.
-// It stops when the sampled value exceeds a threshold, and then performs interpolation to refine the hit point.
-// The function returns a boolean indicating if a hit point was found and outputs the final hit point position.
+
 bool rayMarching(const Sampler3D volume, const float3 p1, const float3 p2, const int numSteps, const float threshold, out float3 hitPoint)
 {
   const float3 stepSize = (p2 - p1) / float(numSteps);
   hitPoint = p1;
 
-  float3 prevPoint = hitPoint;
-  float value = volume.Sample(hitPoint).r;
-  float prevValue = value;
-
-  for (int i = 0; i < numSteps; ++i)
-  {
-    if (value > threshold)
-    {
-      float t = clamp((threshold - prevValue) / (value - prevValue), 0.0, 1.0);
-      hitPoint = lerp(prevPoint, hitPoint, t);
+  for (int i = 0; i < numSteps; ++i) {
+    float value = volume.Sample(hitPoint).r;
+    if (value > threshold) {
       return true;
     }
 
-    prevValue = value;
-    prevPoint = hitPoint;
     hitPoint += stepSize;
-    value = volume.Sample(hitPoint).r;
   }
 
   return false;

@@ -16,3 +16,5 @@ downloaded_resources/*
 samples/.vscode/
 build/
 log_*.txt
+cmake-build-*/
+.idea/

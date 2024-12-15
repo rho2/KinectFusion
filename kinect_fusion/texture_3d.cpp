@@ -58,14 +58,14 @@ class Texture3dSample : public nvvkhl::IAppElement
 {
   struct Settings
   {
-    uint32_t             powerOfTwoSize = 6;
-    bool                 useGpu         = true;
-    VkFilter             magFilter      = VK_FILTER_LINEAR;
+    uint32_t             powerOfTwoSize = 8;
+    bool                 useGpu         = false;
+    VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinDefaultValues();
     int                  headlight      = 1;
     glm::vec3            toLight        = {1.F, 1.F, 1.F};
-    int                  steps          = 100;
+    int                  steps          = 500;
     float                threshold      = 0.05f;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
     uint32_t             getSize() { return 1 << powerOfTwoSize; }
@@ -124,39 +124,6 @@ public:
 
     ImGuiH::CameraWidget();
 
-    ImGui::Text("Shading");
-    PE::begin();
-    PE::entry("Color", [&] { return ImGui::ColorEdit3("##1", &m_settings.surfaceColor.x); });
-    redoTexture |= PE::entry("Filter Mode", [&] { return ImGui::Combo("##6", (int*)&s.magFilter, "Nearest\0Linear\0"); });
-    redoTexture |= PE::entry("Address Mode", [&] {
-      return ImGui::Combo("##6", (int*)&s.addressMode,
-                          "Repeat\0Mirror Repeat\0Clamp to Edge\0Clamp to Border\0Mirror Clamp to Edge\0");
-    });
-    PE::entry("Head light", [&] { return ImGui::Checkbox("##1", (bool*)&m_settings.headlight); });
-    ImGui::BeginDisabled(m_settings.headlight);
-    PE::entry("Light Dir", [&] { return ImGui::SliderFloat3("##1", &m_settings.toLight.x, -1.0F, 1.0F); });
-    ImGui::EndDisabled();
-    PE::end();
-    /// ----
-    std::string s_size = "Texture Size: " + std::to_string(1 << s.powerOfTwoSize) + std::string("^3");
-    ImGui::Text("Perlin");
-    PE::begin();
-    redoTexture |= PE::entry(s_size, [&] { return ImGui::SliderInt(s_size.c_str(), (int*)&s.powerOfTwoSize, 4, 9); });
-    m_dirty |= PE::entry(
-        "Octave", [&] { return ImGui::SliderInt("##3", (int*)&s.perlin.octave, 1, 8); }, "Looping the noise n-times");
-    m_dirty |= PE::entry(
-        "Power",
-        [&] { return ImGui::SliderFloat("##1", &s.perlin.power, 0.001F, 3, "%.3f", ImGuiSliderFlags_Logarithmic); },
-        "Increase the values. Low power equal to sharp edges, higher equal to smooth transition.");
-    m_dirty |= PE::entry(
-        "Frequency",
-        [&] { return ImGui::SliderFloat("##2", &s.perlin.frequency, 0.1F, 5.F, "%.3f", ImGuiSliderFlags_Logarithmic); },
-        "Number of time the noise is sampled in the domain.");
-    m_dirty |= PE::entry(
-        "Gpu Creation", [&] { return ImGui::Checkbox("##4", &s.useGpu); },
-        "Use compute shader to generate the texture data");
-    PE::end();
-    /// ----
     ImGui::Text("Ray Marching");
     PE::begin();
     PE::entry(
@@ -164,74 +131,6 @@ public:
         "Values below the threshold are ignored. High Power value is needed, for the threshold to be effective.");
     PE::entry(
         "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
-    PE::end();
-    /// ----
-    ImGui::Text("Presets");
-    PE::begin();
-    {
-      static int preset = 0;
-      if(PE::entry("Presets", [&] { return ImGui::SliderInt("##1", &preset, 0, 9); }))
-      {
-        m_dirty     = true;
-        redoTexture = true;
-        switch(preset)
-        {
-          case 0:
-            m_settings.perlin         = DH::PerlinDefaultValues();
-            m_settings.powerOfTwoSize = 6;
-            m_settings.threshold      = 0.05F;
-            break;
-          case 1:
-            m_settings.perlin         = {8, 3, 5};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.1F;
-            break;
-          case 2:
-            m_settings.perlin         = {8, .3F, .2F};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.7F;
-            break;
-          case 3:
-            m_settings.perlin         = {8, 1.7F, 3.0F};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.14F;
-            break;
-          case 4:
-            m_settings.perlin         = {8, 2.3F, 1.4F};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.009F;
-            break;
-          case 5:
-            m_settings.perlin         = {2, 0.86F, 1.42F};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.28F;
-            break;
-          case 6:
-            m_settings.perlin         = {3, 0.005F, 0.92F};
-            m_settings.powerOfTwoSize = 6;
-            m_settings.threshold      = 0.1F;
-            break;
-          case 7:
-            m_settings.perlin         = {8, 3.0F, 5.F};
-            m_settings.powerOfTwoSize = 7;
-            m_settings.threshold      = 0.009F;
-            break;
-          case 8:
-            m_settings.perlin         = {2, 2.0F, 4.5F};
-            m_settings.powerOfTwoSize = 5;
-            m_settings.threshold      = 0.226F;
-            break;
-          case 9:
-            m_settings.perlin         = {1, 2.0F, 25.F};
-            m_settings.powerOfTwoSize = 1;
-            m_settings.threshold      = 0.045F;
-            break;
-          default:
-            m_settings = Settings();
-            break;
-        }
-      }
-    }
     PE::end();
 
     if(redoTexture)
@@ -303,6 +202,7 @@ public:
       pushConstant.steps     = m_settings.steps;
       pushConstant.color     = m_settings.surfaceColor;
       pushConstant.transfo   = glm::mat4(1);  // Identity
+      pushConstant.size      = m_settings.getSize();
       vkCmdPushConstants(cmd, m_dsetRaster->getPipeLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                          0, sizeof(DH::PushConstant), &pushConstant);
 
@@ -395,17 +295,10 @@ private:
       {
         for(uint32_t z = 0; z < realSize; z++)
         {
-          float v     = 0.0F;
-          float scale = m_settings.perlin.power;
-          float freq  = m_settings.perlin.frequency / realSize;
+          float mid = m_settings.getSize() / 2;
+          float d = glm::distance(glm::vec3(x, y, z), glm::vec3(mid));
 
-          for(int oct = 0; oct < m_settings.perlin.octave; oct++)
-          {
-            v += glm::perlin(glm::vec3(x, y, z) * freq) / scale;
-            freq *= 2.0F;                      // Double the frequency
-            scale *= m_settings.perlin.power;  // Next power of b
-          }
-          imageData[static_cast<size_t>(z) * realSize * realSize + static_cast<uint64_t>(y) * realSize + x] = v;
+          imageData[static_cast<size_t>(z) * realSize * realSize + static_cast<uint64_t>(y) * realSize + x] = 8 - d;
         }
       }
     }
@@ -476,7 +369,7 @@ private:
     uint32_t           realSize = m_settings.getSize();
     auto               sdbg     = m_dutil->DBG_SCOPE(cmd);
     DH::PerlinSettings perlin   = m_settings.perlin;
-    perlin.frequency /= float(realSize);
+    perlin.frequency = float(realSize);
     vkCmdPushConstants(cmd, m_dsetCompute->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings), &perlin);
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
                               static_cast<uint32_t>(m_dsetCompWrites.size()), m_dsetCompWrites.data());
