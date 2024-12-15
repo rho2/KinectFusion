@@ -21,6 +21,8 @@
 #define VMA_IMPLEMENTATION
 #define IMGUI_DEFINE_MATH_OPERATORS
 
+#include "VirtualSensor.h"
+
 #include "backends/imgui_impl_vulkan.h"
 #include "common/vk_context.hpp"
 #include "glm/gtc/noise.hpp"
@@ -53,7 +55,6 @@ const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(p
 #include "imgui/imgui_helper.h"
 #include "imgui/imgui_camera_widget.h"
 
-
 class Texture3dSample : public nvvkhl::IAppElement
 {
   struct Settings
@@ -79,6 +80,11 @@ public:
   // Implementation of nvvk::IApplication interface
   void onAttach(nvvkhl::Application* app) override
   {
+    if (!sensor.Init("../Data/rgbd_dataset_freiburg1_xyz/")) {
+      std::cout << "Failed to initialize the sensor!\nCheck file path!" << std::endl;
+      exit(1);
+    }
+
     m_app    = app;
     m_device = m_app->getDevice();
 
@@ -94,7 +100,8 @@ public:
     m_dsetRaster  = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
-    m_settings.perlin = DH::PerlinDefaultValues();
+    imageData.resize(m_settings.getTotalSize());
+    std::fill(imageData.begin(), imageData.end(), -1.0f);
 
     createComputePipeline();
     createTexture();
@@ -113,8 +120,7 @@ public:
   };
 
 
-  void onUIRender() override
-  {
+  void onUIRender() override {
     namespace PE      = ImGuiH::PropertyEditor;
     auto& s           = m_settings;
     bool  redoTexture = false;
@@ -131,6 +137,13 @@ public:
         "Values below the threshold are ignored. High Power value is needed, for the threshold to be effective.");
     PE::entry(
         "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
+    PE::end();
+
+    PE::begin();
+    if (PE::Button("NextFrame", {-1, 20})) {
+      processFrame();
+      redoTexture = TRUE;
+    }
     PE::end();
 
     if(redoTexture)
@@ -221,6 +234,12 @@ public:
   }
 
 private:
+  void processFrame()
+  {
+    nvh::ScopedTimer st(__FUNCTION__);
+    sensor.ProcessNextFrame();
+  }
+
   void createTexture()
   {
     nvh::ScopedTimer st(__FUNCTION__);
@@ -286,20 +305,43 @@ private:
   void fillPerlinImage(std::vector<float>& imageData)
   {
     nvh::ScopedTimer st(__FUNCTION__);
-
     uint32_t realSize = m_settings.getSize();
-    // Simple perlin noise
-    for(uint32_t x = 0; x < realSize; x++)
-    {
-      for(uint32_t y = 0; y < realSize; y++)
-      {
-        for(uint32_t z = 0; z < realSize; z++)
-        {
-          float mid = m_settings.getSize() / 2;
-          float d = glm::distance(glm::vec3(x, y, z), glm::vec3(mid));
 
-          imageData[static_cast<size_t>(z) * realSize * realSize + static_cast<uint64_t>(y) * realSize + x] = 8 - d;
+    if (sensor.m_currentIdx == -1)
+      return;
+
+    float* depthMap = sensor.GetDepth();
+    Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
+    Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
+
+    Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
+    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
+
+    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
+
+    unsigned int width = sensor.GetDepthImageWidth();
+    unsigned int height = sensor.GetDepthImageHeight();
+
+    #pragma omp parallel for collapse(2) schedule(auto)
+    for (unsigned int y = 0; y < height; y++) {
+      for (unsigned int x = 0; x < width; x++) {
+        unsigned int index = y * width + x;
+
+        if (depthMap[index] == MINF) {
+          continue;
         }
+
+        Vector3f coord = Vector3f(x, y, 1.0f);
+        Vector3f coord_cam_space = depthIntrinsicsInv * (depthMap[index] * coord);
+        Vector4f pos = transform  * coord_cam_space.homogeneous() *100;
+
+        int vx = pos.x() + realSize / 2;
+        int vy = pos.z() + realSize / 2;
+        int vz = pos.y() + realSize / 2;
+
+        if (vx >= realSize || vy >= realSize || vz >= realSize)
+          continue;
+        imageData[static_cast<size_t>(vz) * realSize * realSize + static_cast<uint64_t>(vy) * realSize + vx] = 1;
       }
     }
   }
@@ -316,8 +358,6 @@ private:
     }
     else
     {
-      std::vector<float> imageData;
-      imageData.resize(m_settings.getTotalSize());
       fillPerlinImage(imageData);
 
       const VkOffset3D               offset{0};
@@ -332,7 +372,6 @@ private:
     }
     m_dirty = false;
   }
-
 
   void createComputePipeline()
   {
@@ -482,6 +521,9 @@ private:
   VkFormat          m_depthFormat      = VK_FORMAT_X8_D24_UNORM_PACK32;  // Depth format of the depth buffer
   VkPipeline        m_graphicsPipeline = VK_NULL_HANDLE;                 // The graphic pipeline to render
   VkClearColorValue m_clearColor       = {{0.3F, 0.3F, 0.3F, 1.0F}};     // Clear color
+
+  VirtualSensor sensor;
+  std::vector<float> imageData;
 };
 
 int main(int argc, char** argv)

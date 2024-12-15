@@ -184,6 +184,11 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
   float3 V = -ray.direction;
   output.color.xyz =  simpleShading(V, lightDir, normal, pushConst.color.xyz);
   output.color.w = 1;
-  
+
+  // int3 voxelCoord = int3(floor(hitPoint * pushConst.size));
+  // int checkerValue = (voxelCoord.x + voxelCoord.y + voxelCoord.z) % 2;
+  // float3 col = checkerValue == 0 ? float3(0.0f, 0.0f, 0.0f) : float3(1.0f, 1.0f, 1.0f);
+  // output.color.xyz =  col;
+
   return output;
 }
