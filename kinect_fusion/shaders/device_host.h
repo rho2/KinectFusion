@@ -41,16 +41,12 @@ struct FrameInfo
 
 struct PerlinSettings
 {
-  int   octave;
-  float power;
-  float frequency;
+    uint size;
 };
 
-inline PerlinSettings PerlinDefaultValues()
+struct DepthInfo
 {
-  PerlinSettings perlin;
-  perlin.power     = 1.0F;
-  perlin.octave    = 3;
-  perlin.frequency = 1.0F;
-  return perlin;
-}
+    mat4 transform;
+    uint width;
+    mat3 depthIntrinsicsInv;
+};
