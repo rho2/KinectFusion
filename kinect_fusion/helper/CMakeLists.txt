@@ -22,3 +22,16 @@ endif()
 add_library(helper STATIC FreeImageHelper.cpp)
 target_include_directories(helper PUBLIC .)
 target_link_libraries(helper PUBLIC  Eigen3::Eigen freeimage)
+
+set(LIBRARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../Libs CACHE PATH "Path to lib folder")
+if(WIN32)
+    set(FreeImage_INCLUDE_DIR ${LIBRARY_DIR}/FreeImage-3.18.0/Dist/x64/ CACHE PATH "Path to FreeImage header file")
+    set(FreeImage_LIBRARY_DIR ${LIBRARY_DIR}/FreeImage-3.18.0/Dist/x64/ CACHE PATH "Path to FreeImage .lib/.dll folder")
+
+    target_include_directories(helper PUBLIC ${FreeImage_INCLUDE_DIR})
+
+     add_custom_command(TARGET exercise_5 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FreeImage_LIBRARY_DIR}/FreeImage.dll"
+            ${CMAKE_BINARY_DIR})
+endif()
