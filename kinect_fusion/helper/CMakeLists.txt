@@ -30,7 +30,7 @@ if(WIN32)
 
     target_include_directories(helper PUBLIC ${FreeImage_INCLUDE_DIR})
 
-     add_custom_command(TARGET exercise_5 POST_BUILD
+     add_custom_command(TARGET helper POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FreeImage_LIBRARY_DIR}/FreeImage.dll"
             ${CMAKE_BINARY_DIR})
