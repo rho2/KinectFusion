@@ -20,8 +20,9 @@
 
 #define VMA_IMPLEMENTATION
 #define IMGUI_DEFINE_MATH_OPERATORS
-
+#include <vulkan/vulkan.h>
 #include "VirtualSensor.h"
+#include "ICPOptimizer.h"
 
 #include "backends/imgui_impl_vulkan.h"
 #include "common/vk_context.hpp"
@@ -41,6 +42,8 @@
 #include "nvvkhl/gbuffer.hpp"
 #include "nvvkhl/shaders/dh_comp.h"
 #include "nvvk/renderpasses_vk.hpp"
+
+#include <iostream>    
 
 namespace DH {
 using namespace glm;
@@ -74,16 +77,22 @@ class Texture3dSample : public nvvkhl::IAppElement
   };
 
 public:
-  Texture3dSample()           = default;
+  Texture3dSample() : nvvkhl::IAppElement() {
+    
+  }
+          
   ~Texture3dSample() override = default;
+
 
   // Implementation of nvvk::IApplication interface
   void onAttach(nvvkhl::Application* app) override
   {
-    if (!sensor.Init("../Data/rgbd_dataset_freiburg1_xyz/")) {
+    if (!sensor.Init("../../../Data/rgbd_dataset_freiburg1_xyz/")) {
       std::cout << "Failed to initialize the sensor!\nCheck file path!" << std::endl;
       exit(1);
     }
+    sensor.ProcessNextFrame();
+    target.createFromValues(sensor.GetDepth(), sensor.GetDepthIntrinsics(), sensor.GetDepthExtrinsics(), sensor.GetDepthImageWidth(), sensor.GetDepthImageHeight());
 
     m_app    = app;
     m_device = m_app->getDevice();
@@ -357,6 +366,15 @@ private:
     Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
 
     Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
+    
+
+
+    //TODO: ICP
+    // PointCloud source{ sensor.GetDepth(), sensor.GetDepthIntrinsics(), sensor.GetDepthExtrinsics(), sensor.GetDepthImageWidth(), sensor.GetDepthImageHeight(), 8 };
+		// optimizer->estimatePose(source, target, currentCameraToWorld);
+
+    // Matrix4f currentCameraPose = currentCameraToWorld.inverse();
+
     Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
 
     Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
@@ -473,9 +491,17 @@ private:
     Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
 
     Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
 
-    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
+
+    // PointCloud source{ sensor.GetDepth(), sensor.GetDepthIntrinsics(), sensor.GetDepthExtrinsics(), sensor.GetDepthImageWidth(), sensor.GetDepthImageHeight(), 8 };
+		// optimizer->estimatePose(source, target, currentCameraToWorld);
+
+    // Matrix4f currentCameraPose = currentCameraToWorld.inverse();
+
+    // Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
+
+    // Matrix4f transform = currentCameraPose * depthExtrinsicsInv;
+    Matrix4f transform = depthExtrinsicsInv;
 
     unsigned int width = sensor.GetDepthImageWidth();
 
@@ -621,6 +647,9 @@ private:
   VkClearColorValue m_clearColor       = {{0.3F, 0.3F, 0.3F, 1.0F}};     // Clear color
 
   VirtualSensor sensor;
+  PointCloud target;
+  LinearICPOptimizer optimizer;
+  Matrix4f currentCameraToWorld {Matrix4f::Identity()};
   std::vector<float> voxel_grid;
 };
 
