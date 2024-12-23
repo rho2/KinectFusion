@@ -20,7 +20,7 @@
 
 #define VMA_IMPLEMENTATION
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include <vulkan/vulkan.h>
+
 #include "VirtualSensor.h"
 #include "ICPOptimizer.h"
 
@@ -43,7 +43,9 @@
 #include "nvvkhl/shaders/dh_comp.h"
 #include "nvvk/renderpasses_vk.hpp"
 
-#include <iostream>    
+#include <vulkan/vulkan.h>
+
+#include <iostream>
 
 namespace DH {
 using namespace glm;
