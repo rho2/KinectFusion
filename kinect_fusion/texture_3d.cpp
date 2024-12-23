@@ -101,7 +101,10 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), -1.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
+
+    voxel_grid_weights.resize(m_settings.getTotalSize());
+    std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
 
     createVkBuffers();
     createComputePipeline();
@@ -364,29 +367,82 @@ private:
     unsigned int width = sensor.GetDepthImageWidth();
     unsigned int height = sensor.GetDepthImageHeight();
 
-    #pragma omp parallel for collapse(2) schedule(auto)
-    for (unsigned int y = 0; y < height; y++) {
-      for (unsigned int x = 0; x < width; x++) {
-        unsigned int index = y * width + x;
+    int counter = 0;
 
-        if (depthMap[index] == MINF) {
-          continue;
+    Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+
+    #pragma omp parallel for collapse(3) schedule(auto)
+    for (unsigned int k = 0; k < 256; k++) {
+      for (unsigned int j = 0; j < 256; j++) {
+        for (unsigned int i = 0; i < 256; i++) {
+          Vector4f coord = Vector4f((i-128)/100., (k-128)/100., (j-128)/100., 1.0f);
+          Vector3f camera_coord = (foo * coord).head(3);
+
+          Vector3f pix_coord = depthIntrinsics * camera_coord;
+
+          if (pix_coord.z() <= 0.0) {
+            continue;
+          }
+
+          Vector2i pix = Vector2i(pix_coord.x() / pix_coord.z(), pix_coord.y() / pix_coord.z());
+
+          if (pix.x() < 0 || pix.x() >= width || pix.y() < 0 || pix.y() >= height) {
+            continue;
+          }
+
+          counter++;
+
+          float d = depthMap[pix.y() * width + pix.x()];
+
+
+          if (d == MINF) {
+
+            continue;
+          }
+
+          float sdf = d - camera_coord.z();
+
+          float trunc_distance = 0.1f;
+
+          if (sdf < -trunc_distance) {
+            continue;
+          }
+
+          sdf = std::min(1.0f, fabsf(sdf) / trunc_distance) * copysignf(1.0f, sdf);
+
+          float new_value = (imageData[k * realSize * realSize + j * realSize + i] + sdf) / 2;
+
+          imageData[k * realSize * realSize + j * realSize + i] = new_value;
+
         }
-
-        Vector3f coord = Vector3f(x, y, 1.0f);
-        Vector3f coord_cam_space = depthIntrinsicsInv * (depthMap[index] * coord);
-        Vector4f pos = transform  * coord_cam_space.homogeneous();
-
-        int vx = 100 * pos.x() + realSize / 2;
-        int vy = 100 * pos.z() + realSize / 2;
-        int vz = 100 * pos.y() + realSize / 2;
-
-        if (vx >= realSize || vy >= realSize || vz >= realSize || vx < 0 || vy < 0 || vz < 0)
-          continue;
-
-        imageData[static_cast<size_t>(vz) * realSize * realSize + static_cast<uint64_t>(vy) * realSize + vx] = 1;
       }
     }
+
+    std::cout<< std::endl << "counter: " << counter << " | " << counter / (256. * 256 * 256) << std::endl;
+
+    // #pragma omp parallel for collapse(2) schedule(auto)
+    // for (unsigned int y = 0; y < height; y++) {
+    //   for (unsigned int x = 0; x < width; x++) {
+    //     unsigned int index = y * width + x;
+    //
+    //     if (depthMap[index] == MINF) {
+    //       continue;
+    //     }
+    //
+    //     Vector3f coord = Vector3f(x, y, 1.0f);
+    //     Vector3f coord_cam_space = depthIntrinsicsInv * (depthMap[index] * coord);
+    //     Vector4f pos = transform  * coord_cam_space.homogeneous();
+    //
+    //     int vx = 100 * pos.x() + realSize / 2;
+    //     int vy = 100 * pos.z() + realSize / 2;
+    //     int vz = 100 * pos.y() + realSize / 2;
+    //
+    //     if (vx >= realSize || vy >= realSize || vz >= realSize || vx < 0 || vy < 0 || vz < 0)
+    //       continue;
+    //
+    //     imageData[static_cast<size_t>(vz) * realSize * realSize + static_cast<uint64_t>(vy) * realSize + vx] = 1;
+    //   }
+    // }
   }
 
   void setData(VkCommandBuffer cmd)
@@ -622,6 +678,7 @@ private:
 
   VirtualSensor sensor;
   std::vector<float> voxel_grid;
+  std::vector<float> voxel_grid_weights;
 };
 
 int main(int argc, char** argv)
