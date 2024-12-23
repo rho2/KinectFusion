@@ -20,7 +20,7 @@ set(BUILD_TESTING OFF)
 # endif()
 
 
-set(LIBRARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../Libs CACHE PATH "Path to lib folder")
+set(LIBRARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../Libs)
 if(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(FreeImage_INCLUDE_DIR ${LIBRARY_DIR}/FreeImage-3.18.0/Dist/x64/ CACHE PATH "Path to FreeImage header file")
@@ -31,8 +31,8 @@ if(WIN32)
     endif()
 endif(WIN32)
 
-set(Flann_INCLUDE_DIR ${LIBRARY_DIR}/Flann-1.8.4/ CACHE PATH "Path to Flann source folder")
-set(Eigen3_DIR ${LIBRARY_DIR}/Eigen/share/eigen3/cmake CACHE PATH "Path to installed Eigen")
+set(Flann_INCLUDE_DIR ${LIBRARY_DIR}/Flann-1.8.4/)
+set(Eigen3_DIR ${LIBRARY_DIR}/Eigen/share/eigen3/cmake)
 
 find_package(Eigen3 REQUIRED)
 # set(EIGEN3_INCLUDE_DIR ${LIBRARY_DIR}/Eigen/include/eigen3)
