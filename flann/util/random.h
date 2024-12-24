@@ -35,6 +35,8 @@
 #include <cstdlib>
 #include <cstddef>
 #include <vector>
+#include <random>
+
 
 #include "flann/general.h"
 
@@ -117,7 +119,7 @@ public:
         for (int i = 0; i < size_; ++i) vals_[i] = i;
 
         // shuffle the elements in the array
-        std::random_shuffle(vals_.begin(), vals_.end(), generator);
+        flann::random_shuffle(vals_.begin(), vals_.end(), generator);
 
         counter_ = 0;
     }

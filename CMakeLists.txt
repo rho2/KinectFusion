@@ -46,6 +46,7 @@ set(NVPRO_CORE_DIR ${BASE_DIRECTORY}/nvpro_core)
 if(MSVC)
     add_definitions(/wd26812)  # 'enum class' over 'enum'
     add_definitions(/wd26451)  # Arithmetic overflow, casting 4 byte value to 8 byte value
+    add_compile_options(/bigobj)
 endif()
 
 

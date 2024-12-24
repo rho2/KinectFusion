@@ -34,6 +34,7 @@
 #include "defines.h"
 #include <stdexcept>
 #include <cassert>
+#include <cstdlib>
 #include <limits.h>
 
 namespace flann
@@ -221,7 +222,29 @@ inline size_t flann_datatype_size(flann_datatype_t type)
 	}
 }
 
+	template<class RandomIt>
+void random_shuffle(RandomIt first, RandomIt last) {
+	typedef typename std::iterator_traits<RandomIt>::difference_type diff_t;
+
+	for (diff_t i = last - first - 1; i > 0; --i)
+	{
+		using std::swap;
+		swap(first[i], first[std::rand() % (i + 1)]);
+	}
 }
 
+	template<class RandomIt, class RandomFunc>
+	void random_shuffle(RandomIt first, RandomIt last, RandomFunc&& r)
+{
+	typedef typename std::iterator_traits<RandomIt>::difference_type diff_t;
+
+	for (diff_t i = last - first - 1; i > 0; --i)
+	{
+		using std::swap;
+		swap(first[i], first[r(i + 1)]);
+	}
+}
+
+}
 
 #endif  /* FLANN_GENERAL_H_ */
