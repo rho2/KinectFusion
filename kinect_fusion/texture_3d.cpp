@@ -21,6 +21,10 @@
 #define VMA_IMPLEMENTATION
 #define IMGUI_DEFINE_MATH_OPERATORS
 
+#if defined(_WIN32)
+#include "windows.h"
+#endif
+
 #include "VirtualSensor.h"
 #include "ICPOptimizer.h"
 
@@ -384,7 +388,9 @@ private:
     unsigned int width = sensor.GetDepthImageWidth();
     unsigned int height = sensor.GetDepthImageHeight();
 
-    #pragma omp parallel for collapse(2) schedule(auto)
+#if defined(LINUX)
+#pragma omp parallel for collapse(2) schedule(auto)
+#endif
     for (unsigned int y = 0; y < height; y++) {
       for (unsigned int x = 0; x < width; x++) {
         unsigned int index = y * width + x;
