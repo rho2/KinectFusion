@@ -101,7 +101,7 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 1000.0f);
 
     voxel_grid_weights.resize(m_settings.getTotalSize());
     std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
@@ -410,10 +410,14 @@ private:
 
           sdf = std::min(1.0f, fabsf(sdf) / trunc_distance) * copysignf(1.0f, sdf);
 
-          float new_value = (imageData[k * realSize * realSize + j * realSize + i] + sdf) / 2;
+          float old_weight = voxel_grid_weights[k * realSize * realSize + j * realSize + i];
+          float new_weight = new_weight + 1;
+
+          float old_value = imageData[k * realSize * realSize + j * realSize + i];
+          float new_value = (old_value * old_weight + sdf) / new_weight;
 
           imageData[k * realSize * realSize + j * realSize + i] = new_value;
-
+          voxel_grid_weights[k * realSize * realSize + j * realSize + i] = new_weight;
         }
       }
     }
