@@ -411,7 +411,7 @@ private:
           sdf = std::min(1.0f, fabsf(sdf) / trunc_distance) * copysignf(1.0f, sdf);
 
           float old_weight = voxel_grid_weights[k * realSize * realSize + j * realSize + i];
-          float new_weight = new_weight + 1;
+          float new_weight = old_weight + 1;
 
           float old_value = imageData[k * realSize * realSize + j * realSize + i];
           float new_value = (old_value * old_weight + sdf) / new_weight;
@@ -544,7 +544,7 @@ private:
 
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j) {
-        dInfo.depthIntrinsicsInv[i][j] = depthIntrinsicsInv(i, j);
+        dInfo.depthIntrinsics[i][j] = depthIntrinsics(i, j);
       }
     }
 
