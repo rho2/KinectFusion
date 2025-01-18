@@ -84,9 +84,9 @@ class Texture3dSample : public nvvkhl::IAppElement
 
 public:
   Texture3dSample() : nvvkhl::IAppElement() {
-    
+
   }
-          
+
   ~Texture3dSample() override = default;
 
 
@@ -116,7 +116,10 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), -1.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
+
+    voxel_grid_weights.resize(m_settings.getTotalSize());
+    std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
 
     createVkBuffers();
     createComputePipeline();
@@ -372,7 +375,7 @@ private:
     Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
 
     Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-    
+
 
 
     //TODO: ICP
@@ -387,6 +390,56 @@ private:
 
     unsigned int width = sensor.GetDepthImageWidth();
     unsigned int height = sensor.GetDepthImageHeight();
+
+    int counter = 0;
+    Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+/*
+    for (unsigned int k = 0; k < 256; k++) {
+      for (unsigned int j = 0; j < 256; j++) {
+        for (unsigned int i = 0; i < 256; i++) {
+          Vector4f coord = Vector4f((i-128)/100., (k-128)/100., (j-128)/100., 1.0f);
+          Vector3f camera_coord = (foo * coord).head(3);
+
+          Vector3f pix_coord = depthIntrinsics * camera_coord;
+
+          if (pix_coord.z() <= 0.0) {
+            continue;
+          }
+
+          Vector2i pix = Vector2i(pix_coord.x() / pix_coord.z(), pix_coord.y() / pix_coord.z());
+
+          if (pix.x() < 0 || pix.x() >= width || pix.y() < 0 || pix.y() >= height) {
+            continue;
+          }
+
+          counter++;
+
+          float d = depthMap[pix.y() * width + pix.x()];
+
+
+          if (d == MINF) {
+
+            continue;
+          }
+
+          float sdf = d - camera_coord.z();
+
+          float trunc_distance = 0.1f;
+
+          if (sdf < -trunc_distance) {
+            continue;
+          }
+
+          sdf = std::min(1.0f, fabsf(sdf) / trunc_distance) * copysignf(1.0f, sdf);
+
+          float new_value = (imageData[k * realSize * realSize + j * realSize + i] + sdf) / 2;
+
+          imageData[k * realSize * realSize + j * realSize + i] = new_value;
+
+        }
+      }
+    }
+    */
 
 #if defined(LINUX)
 #pragma omp parallel for collapse(2) schedule(auto)
@@ -506,10 +559,10 @@ private:
 
     // Matrix4f currentCameraPose = currentCameraToWorld.inverse();
 
-    // Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
+    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
 
     // Matrix4f transform = currentCameraPose * depthExtrinsicsInv;
-    Matrix4f transform = depthExtrinsicsInv;
+    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
 
     unsigned int width = sensor.GetDepthImageWidth();
 
@@ -659,6 +712,7 @@ private:
   LinearICPOptimizer optimizer;
   Matrix4f currentCameraToWorld {Matrix4f::Identity()};
   std::vector<float> voxel_grid;
+  std::vector<float> voxel_grid_weights;
 };
 
 int main(int argc, char** argv)

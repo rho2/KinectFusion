@@ -116,7 +116,7 @@ bool rayMarching(const Sampler3D volume, const float3 p1, const float3 p2, const
 
   for (int i = 0; i < numSteps; ++i) {
     float value = volume.Sample(hitPoint).r;
-    if (value > threshold) {
+    if (value < 0) {
       return true;
     }
 
