@@ -23,34 +23,57 @@
 
 #define WORKGROUP_SIZE 16
 RWTexture3D<float> voxel_grid;
+RWTexture3D<float> voxel_grid_weights;
 RWTexture2D<float> depth_map;
 ConstantBuffer<DepthInfo> dInfo;
 
 [[vk::push_constant]] ConstantBuffer<PerlinSettings> perlinSettings;
 
 [shader("compute")]
-[numthreads(WORKGROUP_SIZE, WORKGROUP_SIZE, 1)]
+[numthreads(1, 1, 1)]
 void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 {
-    if (isnan(depth_map[threadIdx.xy]))
+    if (!dInfo.is_ini) {
+        voxel_grid[threadIdx] = 10000;
+        voxel_grid_weights[threadIdx] = 0;
+    }
+
+    voxel_grid[threadIdx.xyz] = 10000;
+
+    float4 coord;
+    coord.xyz = (threadIdx.xyz - 128.) / 100.;
+    coord.z = 1.0;
+
+    float3 camera_coord = (dInfo.transform * coord).xyz;
+    float3 pix_coord = dInfo.depthIntrinsics * camera_coord;
+
+    if (pix_coord.z <= 0.0)
         return;
 
-    float3 coord = float3(threadIdx.x, threadIdx.y, 1.0);
-    float3 coord_cam_space = dInfo.depthIntrinsicsInv * (depth_map[threadIdx.xy] * coord);
+    uint2 pix = uint2(float2(pix_coord.x / pix_coord.z, pix_coord.y / pix_coord.z));
 
-    float4 coord_cam_space_homo;
-    coord_cam_space_homo.xyz = coord_cam_space;
-    coord_cam_space_homo.w = 1.0;
+    if (pix.x < 0 || pix.x >= dInfo.width || pix.y < 0 || pix.y >= dInfo.height)
+        return;
 
-    float4 pos = dInfo.transform * coord_cam_space_homo;
+    float d = depth_map[pix];
 
-    int vx = int(floor(100.0 * pos.x) + (perlinSettings.size / 2.0f));
-    int vy = int(floor(100.0 * pos.z) + (perlinSettings.size / 2.0f));
-    int vz = int(floor(100.0 * pos.y) + (perlinSettings.size / 2.0f));
+    if (isnan(d))
+        return;
 
-    if (vx >= perlinSettings.size || vy >= perlinSettings.size || vz >= perlinSettings.size || vx < 0 || vy < 0 || vz < 0) {
+    float sdf = d - camera_coord.z;
+    float trunc_distance = 0.1f;
 
-    } else {
-        voxel_grid[uint3(vx, vy, vz)] = 1;
-    }
+    if (sdf < -trunc_distance)
+        return;
+
+    sdf = min(1.0, abs(sdf) / trunc_distance) * copysign(1.0f, sdf);
+
+    float old_weight = voxel_grid_weights[threadIdx.xyz];
+    float new_weight = old_weight + 1;
+
+    float old_value = voxel_grid[threadIdx.xyz];
+    float new_value = (old_value * old_weight + sdf) / new_weight;
+
+    voxel_grid[threadIdx.xyz] = voxel_grid[threadIdx] - 5001;
+    voxel_grid_weights[threadIdx.xyz] = new_weight;
 }

@@ -286,6 +286,22 @@ private:
     m_texture                        = m_alloc->createTexture(texImage, view_info, sampler_info);
     m_texture.descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+
+    nvvk::Image texImageWeights      = m_alloc->createImage(create_info);
+    VkImageViewCreateInfo view_info_weights{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info_weights.pNext                           = nullptr;
+    view_info_weights.image                           = texImageWeights.image;
+    view_info_weights.format                          = imgFormat;
+    view_info_weights.viewType                        = VK_IMAGE_VIEW_TYPE_3D;
+    view_info_weights.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info_weights.subresourceRange.baseMipLevel   = 0;
+    view_info_weights.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+    view_info_weights.subresourceRange.baseArrayLayer = 0;
+    view_info_weights.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+
+    m_texture_weights                        = m_alloc->createTexture(texImageWeights, view_info_weights, sampler_info);
+    m_texture_weights.descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
     VkImageCreateInfo create_info_depth_map{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     create_info_depth_map.imageType     = VK_IMAGE_TYPE_2D;
     create_info_depth_map.format        = VK_FORMAT_R32_SFLOAT;
@@ -332,10 +348,12 @@ private:
     // The descriptors
     m_dsetCompWrites.clear();
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 0, &m_texture.descriptor));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, &m_depth_texture.descriptor));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, &depthInfoBuffer));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, &m_texture_weights.descriptor));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, &m_depth_texture.descriptor));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 3, &depthInfoBuffer));
 
     nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    nvvk::cmdBarrierImageLayout(cmd, m_texture_weights.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     setData(cmd);
 
     m_app->submitAndWaitTempCmdBuffer(cmd);
@@ -357,12 +375,9 @@ private:
 
     float* depthMap = sensor.GetDepth();
     Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
-    Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
 
     Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
     Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
-
-    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
 
     unsigned int width = sensor.GetDepthImageWidth();
     unsigned int height = sensor.GetDepthImageHeight();
@@ -423,30 +438,6 @@ private:
     }
 
     std::cout<< std::endl << "counter: " << counter << " | " << counter / (256. * 256 * 256) << std::endl;
-
-    // #pragma omp parallel for collapse(2) schedule(auto)
-    // for (unsigned int y = 0; y < height; y++) {
-    //   for (unsigned int x = 0; x < width; x++) {
-    //     unsigned int index = y * width + x;
-    //
-    //     if (depthMap[index] == MINF) {
-    //       continue;
-    //     }
-    //
-    //     Vector3f coord = Vector3f(x, y, 1.0f);
-    //     Vector3f coord_cam_space = depthIntrinsicsInv * (depthMap[index] * coord);
-    //     Vector4f pos = transform  * coord_cam_space.homogeneous();
-    //
-    //     int vx = 100 * pos.x() + realSize / 2;
-    //     int vy = 100 * pos.z() + realSize / 2;
-    //     int vz = 100 * pos.y() + realSize / 2;
-    //
-    //     if (vx >= realSize || vy >= realSize || vz >= realSize || vx < 0 || vy < 0 || vz < 0)
-    //       continue;
-    //
-    //     imageData[static_cast<size_t>(vz) * realSize * realSize + static_cast<uint64_t>(vy) * realSize + vx] = 1;
-    //   }
-    // }
   }
 
   void setData(VkCommandBuffer cmd)
@@ -485,7 +476,8 @@ private:
     // d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    d->addBinding(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    d->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    d->addBinding(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     m_dutil->DBG_NAME(d->getLayout());
@@ -530,17 +522,11 @@ private:
     if (sensor.m_currentIdx < 0) return;
 
     Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
-    Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
-
-    Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
-
-    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
-
-    unsigned int width = sensor.GetDepthImageWidth();
 
     DH::DepthInfo dInfo{};
-    dInfo.width = width;
+    dInfo.width = sensor.GetDepthImageWidth();
+    dInfo.height = sensor.GetDepthImageHeight();
+    dInfo.is_ini = gpu_ini;
 
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 3; ++j) {
@@ -548,11 +534,12 @@ private:
       }
     }
 
+    Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
     for (int i = 0; i < 4; ++i) {
-      dInfo.transform[i].x = transform.row(i).x();
-      dInfo.transform[i].y = transform.row(i).y();
-      dInfo.transform[i].z = transform.row(i).z();
-      dInfo.transform[i].w = transform.row(i).w();
+      dInfo.transform[i].x = foo.row(i).x();
+      dInfo.transform[i].y = foo.row(i).y();
+      dInfo.transform[i].z = foo.row(i).z();
+      dInfo.transform[i].w = foo.row(i).w();
     }
 
     vkCmdUpdateBuffer(cmd, m_depthInfo.buffer, 0, sizeof(DH::DepthInfo), &dInfo);
@@ -564,7 +551,8 @@ private:
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
                               static_cast<uint32_t>(m_dsetCompWrites.size()), m_dsetCompWrites.data());
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline);
-    vkCmdDispatch(cmd, 640, 480, 1);
+    vkCmdDispatch(cmd, 256, 256, 256);
+    gpu_ini = true;
   }
 
 
@@ -580,6 +568,7 @@ private:
     m_alloc->destroy(m_frameInfo);
     m_alloc->destroy(m_depthInfo);
     m_alloc->destroy(m_texture);
+    m_alloc->destroy(m_texture_weights);
     m_alloc->destroy(m_depth_texture);
   }
 
@@ -651,6 +640,7 @@ private:
 private:
   // Local data
   nvvk::Texture   m_texture;
+  nvvk::Texture   m_texture_weights;
   nvvk::Texture   m_depth_texture;
   VkDevice        m_device          = VK_NULL_HANDLE;
   VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
@@ -683,6 +673,7 @@ private:
   VirtualSensor sensor;
   std::vector<float> voxel_grid;
   std::vector<float> voxel_grid_weights;
+  bool gpu_ini = false;
 };
 
 int main(int argc, char** argv)

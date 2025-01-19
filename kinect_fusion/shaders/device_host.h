@@ -48,5 +48,7 @@ struct DepthInfo
 {
     mat4 transform;
     uint width;
-    mat3 depthIntrinsicsInv;
+    uint height;
+    mat3 depthIntrinsics;
+    bool is_ini;
 };
