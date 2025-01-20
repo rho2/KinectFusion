@@ -89,7 +89,6 @@ BASIC_TYPE_SERIALIZER(unsigned long);
 BASIC_TYPE_SERIALIZER(float);
 BASIC_TYPE_SERIALIZER(double);
 BASIC_TYPE_SERIALIZER(bool);
-BASIC_TYPE_SERIALIZER(long long unsigned int);
 #ifdef _MSC_VER
 BASIC_TYPE_SERIALIZER(unsigned __int64);
 #endif

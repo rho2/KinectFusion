@@ -116,7 +116,9 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
+    // the line below is part of volumetric integration. Uncomment when finished
+    // std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), -1.0f);
 
     voxel_grid_weights.resize(m_settings.getTotalSize());
     std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
@@ -393,6 +395,8 @@ private:
 
     int counter = 0;
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+
+    // the lines below are part of volumetric integration. Uncomment when finished
 /*
     for (unsigned int k = 0; k < 256; k++) {
       for (unsigned int j = 0; j < 256; j++) {
