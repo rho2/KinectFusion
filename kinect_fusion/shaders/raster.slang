@@ -180,15 +180,14 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
   if (dot(ray.direction, normal) > 0)  // Make nornal pointing toward origin
     normal *= -1;
 
-  float3 lightDir = (frameInfo.headlight == 1) ? -ray.direction : normalize(frameInfo.toLight);
-  float3 V = -ray.direction;
-  output.color.xyz =  simpleShading(V, lightDir, normal, pushConst.color.xyz);
+  if (pushConst.render_normals) {
+    output.color.xyz = normal.xyz;
+  } else {
+    float3 lightDir = (frameInfo.headlight == 1) ? -ray.direction : normalize(frameInfo.toLight);
+    float3 V = -ray.direction;
+    output.color.xyz =  simpleShading(V, lightDir, normal, pushConst.color.xyz);
+  }
+
   output.color.w = 1;
-
-  // int3 voxelCoord = int3(floor(hitPoint * pushConst.size));
-  // int checkerValue = (voxelCoord.x + voxelCoord.y + voxelCoord.z) % 2;
-  // float3 col = checkerValue == 0 ? float3(0.0f, 0.0f, 0.0f) : float3(1.0f, 1.0f, 1.0f);
-  // output.color.xyz =  col;
-
   return output;
 }

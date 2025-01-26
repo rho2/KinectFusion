@@ -28,6 +28,7 @@ struct PushConstant
   float threshold;
   int   steps;
   int   size;
+  bool render_normals;
 };
 
 struct FrameInfo

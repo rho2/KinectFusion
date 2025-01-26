@@ -60,7 +60,8 @@ class Texture3dSample : public nvvkhl::IAppElement
   struct Settings
   {
     uint32_t             powerOfTwoSize = 8;
-    bool                 useGpu         = true;
+    bool                 useGpu         = false;
+    bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
@@ -100,7 +101,7 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), 1000.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 1.0f);
 
     voxel_grid_weights.resize(m_settings.getTotalSize());
     std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
@@ -137,6 +138,12 @@ public:
     PE::begin();
     PE::entry(
         "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
+    PE::end();
+
+    PE::begin();
+    PE::entry(
+        "Render normals", [&] { return ImGui::Checkbox("##4", &s.renderNormals); },
+        "Render normals instead of pure image");
     PE::end();
 
     PE::begin();
@@ -214,6 +221,7 @@ public:
       pushConstant.color     = m_settings.surfaceColor;
       pushConstant.transfo   = glm::mat4(1);  // Identity
       pushConstant.size      = m_settings.getSize();
+      pushConstant.render_normals = m_settings.renderNormals;
       vkCmdPushConstants(cmd, m_dsetRaster->getPipeLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                          0, sizeof(DH::PushConstant), &pushConstant);
 
