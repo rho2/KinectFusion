@@ -41,14 +41,6 @@ struct FrameInfo
 
 struct PerlinSettings
 {
-    uint size;
-};
-
-struct DepthInfo
-{
     mat4 transform;
-    uint width;
-    uint height;
-    mat3 depthIntrinsics;
     bool is_ini;
 };

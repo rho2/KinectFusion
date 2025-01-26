@@ -60,14 +60,13 @@ class Texture3dSample : public nvvkhl::IAppElement
   struct Settings
   {
     uint32_t             powerOfTwoSize = 8;
-    bool                 useGpu         = false;
+    bool                 useGpu         = true;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
     int                  headlight      = 1;
     glm::vec3            toLight        = {1.F, 1.F, 1.F};
     int                  steps          = 500;
-    float                threshold      = 0.05f;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
     uint32_t             getSize() { return 1 << powerOfTwoSize; }
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
@@ -137,9 +136,6 @@ public:
     ImGui::Text("Ray Marching");
     PE::begin();
     PE::entry(
-        "Threshold", [&] { return ImGui::SliderFloat("##1", &m_settings.threshold, -1.0F, 1.0); },
-        "Values below the threshold are ignored. High Power value is needed, for the threshold to be effective.");
-    PE::entry(
         "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
     PE::end();
 
@@ -153,8 +149,6 @@ public:
     if(redoTexture)
     {
       vkDeviceWaitIdle(m_device);
-      // m_alloc->destroy(m_texture);
-      // m_alloc->destroy(m_depth_texture);
       createTexture();
     }
 
@@ -216,7 +210,6 @@ public:
 
       // Push constant information
       DH::PushConstant pushConstant{};
-      pushConstant.threshold = m_settings.threshold;
       pushConstant.steps     = m_settings.steps;
       pushConstant.color     = m_settings.surfaceColor;
       pushConstant.transfo   = glm::mat4(1);  // Identity
@@ -343,14 +336,12 @@ private:
 
     VkCommandBuffer cmd = m_app->createTempCmdBuffer();
 
-    VkDescriptorBufferInfo depthInfoBuffer {m_depthInfo.buffer, 0, VK_WHOLE_SIZE};
 
     // The descriptors
     m_dsetCompWrites.clear();
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 0, &m_texture.descriptor));
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, &m_texture_weights.descriptor));
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, &m_depth_texture.descriptor));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 3, &depthInfoBuffer));
 
     nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     nvvk::cmdBarrierImageLayout(cmd, m_texture_weights.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
@@ -376,21 +367,19 @@ private:
     float* depthMap = sensor.GetDepth();
     Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
 
-    Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
-
-    unsigned int width = sensor.GetDepthImageWidth();
-    unsigned int height = sensor.GetDepthImageHeight();
-
-    int counter = 0;
-
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
 
     #pragma omp parallel for collapse(3) schedule(auto)
     for (unsigned int k = 0; k < 256; k++) {
       for (unsigned int j = 0; j < 256; j++) {
         for (unsigned int i = 0; i < 256; i++) {
-          Vector4f coord = Vector4f((i-128)/100., (k-128)/100., (j-128)/100., 1.0f);
+          Vector4f coord = Vector4f(
+            (i-128)/100.,
+            (k-128)/100.,
+            (j-128)/100.,
+            1.0f
+            );
+
           Vector3f camera_coord = (foo * coord).head(3);
 
           Vector3f pix_coord = depthIntrinsics * camera_coord;
@@ -401,17 +390,12 @@ private:
 
           Vector2i pix = Vector2i(pix_coord.x() / pix_coord.z(), pix_coord.y() / pix_coord.z());
 
-          if (pix.x() < 0 || pix.x() >= width || pix.y() < 0 || pix.y() >= height) {
+          if (pix.x() < 0 || pix.x() >= 640 || pix.y() < 0 || pix.y() >= 480) {
             continue;
           }
 
-          counter++;
-
-          float d = depthMap[pix.y() * width + pix.x()];
-
-
+          float d = depthMap[pix.y() * 640 + pix.x()];
           if (d == MINF) {
-
             continue;
           }
 
@@ -436,8 +420,6 @@ private:
         }
       }
     }
-
-    std::cout<< std::endl << "counter: " << counter << " | " << counter / (256. * 256 * 256) << std::endl;
   }
 
   void setData(VkCommandBuffer cmd)
@@ -473,11 +455,8 @@ private:
 
     auto& d = m_dsetCompute;
     d->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    // d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
-
     d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     d->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    d->addBinding(3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     m_dutil->DBG_NAME(d->getLayout());
@@ -521,31 +500,16 @@ private:
 
     if (sensor.m_currentIdx < 0) return;
 
-    Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
-
-    DH::DepthInfo dInfo{};
-    dInfo.width = sensor.GetDepthImageWidth();
-    dInfo.height = sensor.GetDepthImageHeight();
-    dInfo.is_ini = gpu_ini;
-
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j) {
-        dInfo.depthIntrinsics[i][j] = depthIntrinsics(i, j);
-      }
-    }
+    DH::PerlinSettings perlin   = m_settings.perlin;
+    perlin.is_ini = gpu_ini;
 
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
     for (int i = 0; i < 4; ++i) {
-      dInfo.transform[i].x = foo.row(i).x();
-      dInfo.transform[i].y = foo.row(i).y();
-      dInfo.transform[i].z = foo.row(i).z();
-      dInfo.transform[i].w = foo.row(i).w();
+      perlin.transform[i].x = foo.row(i).x();
+      perlin.transform[i].y = foo.row(i).y();
+      perlin.transform[i].z = foo.row(i).z();
+      perlin.transform[i].w = foo.row(i).w();
     }
-
-    vkCmdUpdateBuffer(cmd, m_depthInfo.buffer, 0, sizeof(DH::DepthInfo), &dInfo);
-
-    DH::PerlinSettings perlin   = m_settings.perlin;
-    perlin.size = m_settings.getSize();
 
     vkCmdPushConstants(cmd, m_dsetCompute->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings), &perlin);
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
@@ -566,7 +530,6 @@ private:
     m_alloc->destroy(m_vertices);
     m_alloc->destroy(m_indices);
     m_alloc->destroy(m_frameInfo);
-    m_alloc->destroy(m_depthInfo);
     m_alloc->destroy(m_texture);
     m_alloc->destroy(m_texture_weights);
     m_alloc->destroy(m_depth_texture);
@@ -587,10 +550,6 @@ private:
     m_frameInfo = m_alloc->createBuffer(sizeof(DH::FrameInfo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     m_dutil->DBG_NAME(m_frameInfo.buffer);
-
-    m_depthInfo = m_alloc->createBuffer(sizeof(DH::DepthInfo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    m_dutil->DBG_NAME(m_depthInfo.buffer);
 
     m_app->submitAndWaitTempCmdBuffer(cmd);
   }
@@ -656,7 +615,6 @@ private:
   nvvk::Buffer m_vertices;  // Buffer of the vertices
   nvvk::Buffer m_indices;   // Buffer of the indices
   nvvk::Buffer m_frameInfo;
-  nvvk::Buffer m_depthInfo;
 
   nvvkhl::Application*                    m_app = nullptr;
   std::vector<VkWriteDescriptorSet>       m_dsetCompWrites;

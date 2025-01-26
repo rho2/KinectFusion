@@ -1,22 +1,3 @@
-/*
- * Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- * SPDX-FileCopyrightText: Copyright (c) 2014-2021 NVIDIA CORPORATION
- * SPDX-License-Identifier: Apache-2.0
- */
-
 #version 460
 
 #include "device_host.h"
@@ -25,34 +6,40 @@
 RWTexture3D<float> voxel_grid;
 RWTexture3D<float> voxel_grid_weights;
 RWTexture2D<float> depth_map;
-ConstantBuffer<DepthInfo> dInfo;
 
 [[vk::push_constant]] ConstantBuffer<PerlinSettings> perlinSettings;
+
+const mat3 depthIntrinsics = mat3(
+    vec3(525.0f, 0.0f, 319.5f),
+    vec3(0.0f, 525.0f, 239.5f),
+    vec3(0.0f, 0.0f, 1.0f)
+);
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 {
-    if (!dInfo.is_ini) {
+    if (!perlinSettings.is_ini) {
         voxel_grid[threadIdx] = 10000;
         voxel_grid_weights[threadIdx] = 0;
     }
 
-    voxel_grid[threadIdx.xyz] = 10000;
-
     float4 coord;
     coord.xyz = (threadIdx.xyz - 128.) / 100.;
-    coord.z = 1.0;
+    coord.w = 1.0;
 
-    float3 camera_coord = (dInfo.transform * coord).xyz;
-    float3 pix_coord = dInfo.depthIntrinsics * camera_coord;
+    float3 camera_coord = (perlinSettings.transform * coord).xyz;
+    float3 pix_coord = depthIntrinsics * camera_coord;
 
     if (pix_coord.z <= 0.0)
         return;
 
-    uint2 pix = uint2(float2(pix_coord.x / pix_coord.z, pix_coord.y / pix_coord.z));
+    uint2 pix = uint2(
+        int(pix_coord.x / pix_coord.z),
+        int(pix_coord.y / pix_coord.z)
+    );
 
-    if (pix.x < 0 || pix.x >= dInfo.width || pix.y < 0 || pix.y >= dInfo.height)
+    if (pix.x < 0 || pix.x >= 640 || pix.y < 0 || pix.y >= 480)
         return;
 
     float d = depth_map[pix];
@@ -74,6 +61,6 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
     float old_value = voxel_grid[threadIdx.xyz];
     float new_value = (old_value * old_weight + sdf) / new_weight;
 
-    voxel_grid[threadIdx.xyz] = voxel_grid[threadIdx] - 5001;
+    voxel_grid[threadIdx.xyz] = new_value;
     voxel_grid_weights[threadIdx.xyz] = new_weight;
 }
