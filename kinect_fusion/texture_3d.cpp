@@ -58,8 +58,9 @@ using namespace glm;
 
 #include "_autogen/raster_slang.h"
 #include "_autogen/perlin_slang.h"
+#include "_autogen/icp_slang.h"
 const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
-
+const auto& icp_shd = std::vector<uint32_t>{std::begin(icpSlang), std::end(icpSlang)};
 
 #include "imgui/imgui_helper.h"
 #include "imgui/imgui_camera_widget.h"
@@ -69,7 +70,7 @@ class Texture3dSample : public nvvkhl::IAppElement
   struct Settings
   {
     uint32_t             powerOfTwoSize = 8;
-    bool                 useGpu         = false;
+    bool                 useGpu         = true;
     bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
@@ -491,6 +492,20 @@ private:
     d->initPipeLayout(1, &push_constant_ranges);
     m_dutil->DBG_NAME(d->getPipeLayout());
 
+
+    //icp part
+    VkPipelineShaderStageCreateInfo icp_stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    icp_stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    icp_stage_info.module = nvvk::createShaderModule(m_device, icp_shd);
+    icp_stage_info.pName  = "ICPCalcMain";
+
+    VkComputePipelineCreateInfo icp_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    icp_info.layout = d->getPipeLayout();
+    icp_info.stage  = icp_stage_info;
+
+    vkCreateComputePipelines(m_device, {}, 1, &icp_info, nullptr, &m_icpPipeline);
+
+
     VkPipelineShaderStageCreateInfo stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
     stage_info.module = nvvk::createShaderModule(m_device, comp_shd);
@@ -505,10 +520,16 @@ private:
 
     // Clean up
     vkDestroyShaderModule(m_device, comp_info.stage.module, nullptr);
+    vkDestroyShaderModule(m_device, icp_info.stage.module, nullptr);
   }
 
   void runCompute(VkCommandBuffer cmd, const VkExtent3D& size)
   {
+    //TODO: run icp code
+    VkCommandBuffer icp_cmd = m_app->createTempCmdBuffer();
+    
+
+
     {
       {
         const VkOffset3D               offset{0};
@@ -588,6 +609,7 @@ private:
     m_dsetCompute->deinit();
     m_dsetRaster->deinit();
     vkDestroyPipeline(m_device, m_computePipeline, nullptr);
+    vkDestroyPipeline(m_device, m_icpPipeline, nullptr);
     vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr);
 
     m_alloc->destroy(m_vertices);
@@ -667,6 +689,7 @@ private:
   VkDevice        m_device          = VK_NULL_HANDLE;
   VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
   VkPipeline      m_computePipeline = VK_NULL_HANDLE;  // The graphic pipeline to render
+  VkPipeline      m_icpPipeline = VK_NULL_HANDLE;  // The graphic pipeline to render
   bool            m_dirty           = false;
 
   std::unique_ptr<nvvkhl::AllocVma>             m_alloc;
