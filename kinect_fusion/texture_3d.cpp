@@ -70,13 +70,13 @@ class Texture3dSample : public nvvkhl::IAppElement
   {
     uint32_t             powerOfTwoSize = 8;
     bool                 useGpu         = false;
+    bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
     int                  headlight      = 1;
     glm::vec3            toLight        = {1.F, 1.F, 1.F};
     int                  steps          = 500;
-    float                threshold      = 0.05f;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
     uint32_t             getSize() { return 1 << powerOfTwoSize; }
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
@@ -116,9 +116,7 @@ public:
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
     voxel_grid.resize(m_settings.getTotalSize());
-    // the line below is part of volumetric integration. Uncomment when finished
-    // std::fill(voxel_grid.begin(), voxel_grid.end(), 0.0f);
-    std::fill(voxel_grid.begin(), voxel_grid.end(), -1.0f);
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 1.0f);
 
     voxel_grid_weights.resize(m_settings.getTotalSize());
     std::fill(voxel_grid_weights.begin(), voxel_grid_weights.end(), 0.0f);
@@ -154,10 +152,13 @@ public:
     ImGui::Text("Ray Marching");
     PE::begin();
     PE::entry(
-        "Threshold", [&] { return ImGui::SliderFloat("##1", &m_settings.threshold, -1.0F, 1.0); },
-        "Values below the threshold are ignored. High Power value is needed, for the threshold to be effective.");
-    PE::entry(
         "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
+    PE::end();
+
+    PE::begin();
+    PE::entry(
+        "Render normals", [&] { return ImGui::Checkbox("##4", &s.renderNormals); },
+        "Render normals instead of pure image");
     PE::end();
 
     PE::begin();
@@ -170,8 +171,6 @@ public:
     if(redoTexture)
     {
       vkDeviceWaitIdle(m_device);
-      // m_alloc->destroy(m_texture);
-      // m_alloc->destroy(m_depth_texture);
       createTexture();
     }
 
@@ -233,11 +232,11 @@ public:
 
       // Push constant information
       DH::PushConstant pushConstant{};
-      pushConstant.threshold = m_settings.threshold;
       pushConstant.steps     = m_settings.steps;
       pushConstant.color     = m_settings.surfaceColor;
       pushConstant.transfo   = glm::mat4(1);  // Identity
       pushConstant.size      = m_settings.getSize();
+      pushConstant.render_normals = m_settings.renderNormals;
       vkCmdPushConstants(cmd, m_dsetRaster->getPipeLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                          0, sizeof(DH::PushConstant), &pushConstant);
 
@@ -303,6 +302,22 @@ private:
     m_texture                        = m_alloc->createTexture(texImage, view_info, sampler_info);
     m_texture.descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+
+    nvvk::Image texImageWeights      = m_alloc->createImage(create_info);
+    VkImageViewCreateInfo view_info_weights{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    view_info_weights.pNext                           = nullptr;
+    view_info_weights.image                           = texImageWeights.image;
+    view_info_weights.format                          = imgFormat;
+    view_info_weights.viewType                        = VK_IMAGE_VIEW_TYPE_3D;
+    view_info_weights.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info_weights.subresourceRange.baseMipLevel   = 0;
+    view_info_weights.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+    view_info_weights.subresourceRange.baseArrayLayer = 0;
+    view_info_weights.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+
+    m_texture_weights                        = m_alloc->createTexture(texImageWeights, view_info_weights, sampler_info);
+    m_texture_weights.descriptor.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
     VkImageCreateInfo create_info_depth_map{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     create_info_depth_map.imageType     = VK_IMAGE_TYPE_2D;
     create_info_depth_map.format        = VK_FORMAT_R32_SFLOAT;
@@ -344,15 +359,15 @@ private:
 
     VkCommandBuffer cmd = m_app->createTempCmdBuffer();
 
-    VkDescriptorBufferInfo depthInfoBuffer {m_depthInfo.buffer, 0, VK_WHOLE_SIZE};
 
     // The descriptors
     m_dsetCompWrites.clear();
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 0, &m_texture.descriptor));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, &m_depth_texture.descriptor));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, &depthInfoBuffer));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, &m_texture_weights.descriptor));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, &m_depth_texture.descriptor));
 
     nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    nvvk::cmdBarrierImageLayout(cmd, m_texture_weights.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     setData(cmd);
 
     m_app->submitAndWaitTempCmdBuffer(cmd);
@@ -374,34 +389,21 @@ private:
 
     float* depthMap = sensor.GetDepth();
     Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
-    Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
 
-    Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-
-
-
-    //TODO: ICP
-    // PointCloud source{ sensor.GetDepth(), sensor.GetDepthIntrinsics(), sensor.GetDepthExtrinsics(), sensor.GetDepthImageWidth(), sensor.GetDepthImageHeight(), 8 };
-		// optimizer->estimatePose(source, target, currentCameraToWorld);
-
-    // Matrix4f currentCameraPose = currentCameraToWorld.inverse();
-
-    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
-
-    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
-
-    unsigned int width = sensor.GetDepthImageWidth();
-    unsigned int height = sensor.GetDepthImageHeight();
-
-    int counter = 0;
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
 
     // the lines below are part of volumetric integration. Uncomment when finished
-/*
+
     for (unsigned int k = 0; k < 256; k++) {
       for (unsigned int j = 0; j < 256; j++) {
         for (unsigned int i = 0; i < 256; i++) {
-          Vector4f coord = Vector4f((i-128)/100., (k-128)/100., (j-128)/100., 1.0f);
+          Vector4f coord = Vector4f(
+            (i-128)/100.,
+            (k-128)/100.,
+            (j-128)/100.,
+            1.0f
+            );
+
           Vector3f camera_coord = (foo * coord).head(3);
 
           Vector3f pix_coord = depthIntrinsics * camera_coord;
@@ -412,17 +414,12 @@ private:
 
           Vector2i pix = Vector2i(pix_coord.x() / pix_coord.z(), pix_coord.y() / pix_coord.z());
 
-          if (pix.x() < 0 || pix.x() >= width || pix.y() < 0 || pix.y() >= height) {
+          if (pix.x() < 0 || pix.x() >= 640 || pix.y() < 0 || pix.y() >= 480) {
             continue;
           }
 
-          counter++;
-
-          float d = depthMap[pix.y() * width + pix.x()];
-
-
+          float d = depthMap[pix.y() * 640 + pix.x()];
           if (d == MINF) {
-
             continue;
           }
 
@@ -436,41 +433,19 @@ private:
 
           sdf = std::min(1.0f, fabsf(sdf) / trunc_distance) * copysignf(1.0f, sdf);
 
-          float new_value = (imageData[k * realSize * realSize + j * realSize + i] + sdf) / 2;
+          float old_weight = voxel_grid_weights[k * realSize * realSize + j * realSize + i];
+          float new_weight = old_weight + 1;
+
+          float old_value = imageData[k * realSize * realSize + j * realSize + i];
+          float new_value = (old_value * old_weight + sdf) / new_weight;
 
           imageData[k * realSize * realSize + j * realSize + i] = new_value;
-
+          voxel_grid_weights[k * realSize * realSize + j * realSize + i] = new_weight;
         }
-      }
-    }
-    */
-
-#if defined(LINUX)
-#pragma omp parallel for collapse(2) schedule(auto)
-#endif
-    for (unsigned int y = 0; y < height; y++) {
-      for (unsigned int x = 0; x < width; x++) {
-        unsigned int index = y * width + x;
-
-        if (depthMap[index] == MINF) {
-          continue;
-        }
-
-        Vector3f coord = Vector3f(x, y, 1.0f);
-        Vector3f coord_cam_space = depthIntrinsicsInv * (depthMap[index] * coord);
-        Vector4f pos = transform  * coord_cam_space.homogeneous();
-
-        int vx = 100 * pos.x() + realSize / 2;
-        int vy = 100 * pos.z() + realSize / 2;
-        int vz = 100 * pos.y() + realSize / 2;
-
-        if (vx >= realSize || vy >= realSize || vz >= realSize || vx < 0 || vy < 0 || vz < 0)
-          continue;
-
-        imageData[static_cast<size_t>(vz) * realSize * realSize + static_cast<uint64_t>(vy) * realSize + vx] = 1;
       }
     }
   }
+
 
   void setData(VkCommandBuffer cmd)
   {
@@ -505,10 +480,8 @@ private:
 
     auto& d = m_dsetCompute;
     d->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    // d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
-
     d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
-    d->addBinding(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    d->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     m_dutil->DBG_NAME(d->getLayout());
@@ -552,50 +525,23 @@ private:
 
     if (sensor.m_currentIdx < 0) return;
 
-    Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
-    Matrix3f depthIntrinsicsInv = depthIntrinsics.inverse();
-
-    Matrix4f depthExtrinsicsInv = sensor.GetDepthExtrinsics().inverse();
-
-
-    // PointCloud source{ sensor.GetDepth(), sensor.GetDepthIntrinsics(), sensor.GetDepthExtrinsics(), sensor.GetDepthImageWidth(), sensor.GetDepthImageHeight(), 8 };
-		// optimizer->estimatePose(source, target, currentCameraToWorld);
-
-    // Matrix4f currentCameraPose = currentCameraToWorld.inverse();
-
-    Matrix4f trajectoryInv = sensor.GetTrajectory().inverse();
-
-    // Matrix4f transform = currentCameraPose * depthExtrinsicsInv;
-    Matrix4f transform = trajectoryInv * depthExtrinsicsInv;
-
-    unsigned int width = sensor.GetDepthImageWidth();
-
-    DH::DepthInfo dInfo{};
-    dInfo.width = width;
-
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j) {
-        dInfo.depthIntrinsicsInv[i][j] = depthIntrinsicsInv(i, j);
-      }
-    }
-
-    for (int i = 0; i < 4; ++i) {
-      dInfo.transform[i].x = transform.row(i).x();
-      dInfo.transform[i].y = transform.row(i).y();
-      dInfo.transform[i].z = transform.row(i).z();
-      dInfo.transform[i].w = transform.row(i).w();
-    }
-
-    vkCmdUpdateBuffer(cmd, m_depthInfo.buffer, 0, sizeof(DH::DepthInfo), &dInfo);
-
     DH::PerlinSettings perlin   = m_settings.perlin;
-    perlin.size = m_settings.getSize();
+    perlin.is_ini = gpu_ini;
+
+    Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+    for (int i = 0; i < 4; ++i) {
+      perlin.transform[i].x = foo.row(i).x();
+      perlin.transform[i].y = foo.row(i).y();
+      perlin.transform[i].z = foo.row(i).z();
+      perlin.transform[i].w = foo.row(i).w();
+    }
 
     vkCmdPushConstants(cmd, m_dsetCompute->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings), &perlin);
     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
                               static_cast<uint32_t>(m_dsetCompWrites.size()), m_dsetCompWrites.data());
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline);
-    vkCmdDispatch(cmd, 640, 480, 1);
+    vkCmdDispatch(cmd, 256, 256, 256);
+    gpu_ini = true;
   }
 
 
@@ -609,8 +555,8 @@ private:
     m_alloc->destroy(m_vertices);
     m_alloc->destroy(m_indices);
     m_alloc->destroy(m_frameInfo);
-    m_alloc->destroy(m_depthInfo);
     m_alloc->destroy(m_texture);
+    m_alloc->destroy(m_texture_weights);
     m_alloc->destroy(m_depth_texture);
   }
 
@@ -629,10 +575,6 @@ private:
     m_frameInfo = m_alloc->createBuffer(sizeof(DH::FrameInfo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     m_dutil->DBG_NAME(m_frameInfo.buffer);
-
-    m_depthInfo = m_alloc->createBuffer(sizeof(DH::DepthInfo), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    m_dutil->DBG_NAME(m_depthInfo.buffer);
 
     m_app->submitAndWaitTempCmdBuffer(cmd);
   }
@@ -682,6 +624,7 @@ private:
 private:
   // Local data
   nvvk::Texture   m_texture;
+  nvvk::Texture   m_texture_weights;
   nvvk::Texture   m_depth_texture;
   VkDevice        m_device          = VK_NULL_HANDLE;
   VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
@@ -697,7 +640,6 @@ private:
   nvvk::Buffer m_vertices;  // Buffer of the vertices
   nvvk::Buffer m_indices;   // Buffer of the indices
   nvvk::Buffer m_frameInfo;
-  nvvk::Buffer m_depthInfo;
 
   nvvkhl::Application*                    m_app = nullptr;
   std::vector<VkWriteDescriptorSet>       m_dsetCompWrites;
@@ -717,6 +659,7 @@ private:
   Matrix4f currentCameraToWorld {Matrix4f::Identity()};
   std::vector<float> voxel_grid;
   std::vector<float> voxel_grid_weights;
+  bool gpu_ini = false;
 };
 
 int main(int argc, char** argv)

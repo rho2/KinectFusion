@@ -28,6 +28,7 @@ struct PushConstant
   float threshold;
   int   steps;
   int   size;
+  bool render_normals;
 };
 
 struct FrameInfo
@@ -41,12 +42,6 @@ struct FrameInfo
 
 struct PerlinSettings
 {
-    uint size;
-};
-
-struct DepthInfo
-{
     mat4 transform;
-    uint width;
-    mat3 depthIntrinsicsInv;
+    bool is_ini;
 };
