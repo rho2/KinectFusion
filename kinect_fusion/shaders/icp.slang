@@ -7,6 +7,7 @@ cbuffer FrameData : register(b0) {
     float4x4 pose;
     float4x4 lastFramePose;
     float3x3 cameraProjection;
+    int width;
     float distanceThreshold;      // Distance threshold for correspondence
     float angleThreshold;         // Cosine of the angle threshold
 };
@@ -15,8 +16,8 @@ Texture2D<float3>  currentVertexMap: register(t0);   // Input current vertexMap 
 Texture2D<float3> lastVertexMap : register(t1);      // Input last vertexMap Vhat
 Texture2D<float3> currentNormalMap : register(t2);  // Input current normalMap N_(u)
 Texture2D<float3> lastNormalMap : register(t3);     // Input past normalMap Nhat
-RWStructuredBuffer<float> ata : register(u0);       // Output ata
-RWStructuredBuffer<float> atb : register(u1);
+RWStructuredBuffer<float[6]> ata : register(u0);       // Output ata
+RWStructuredBuffer<float[6]> atb : register(u1);
 
 float4x4 transformInverse(float4x4 transform) {
     float3x3 rotation = (float3x3)transform; // Extract the 3x3 rotation part
@@ -39,7 +40,7 @@ float4x4 transformInverse(float4x4 transform) {
 [shader("compute")]
 [numthreads(GROUPDIMENSION, GROUPDIMENSION, 1)]
 void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
-    uint index = threadId.x;
+    uint index = threadId.x + threadId.y * width;
     uint2 pixelCoord = threadId.xy;
 
     float3 v = currentVertexMap.Load(int3(pixelCoord, 0));
@@ -62,7 +63,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
     [unroll]
     for (int i = 0; i < 6; i++) {
         for (int j = 0; j < 6; j++) {
-            ata[i * 6 + j] = at_array[i] * at_array[j];
+            ata[index][i * 6 + j] = at_array[i] * at_array[j];
         }
     }
     
@@ -74,7 +75,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
 
     [unroll]
     for (int i = 0; i < 6; i++) {
-        atb[i] = b * at[i];
+        atb[index][i] = b * at[i];
     }
 
     
