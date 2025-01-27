@@ -44,6 +44,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
     uint2 pixelCoord = threadId.xy;
 
     float3 v = currentVertexMap.Load(int3(pixelCoord, 0));
+    float3 n = currentNormalMap.Load(int3(pixelCoord, 0));
     // VertexNormal u_hat = predictedFrame[index];
     // compute v_hat calculate t_(k-1,k). bring in to camera image space. apply perspective. we now have u_hat. check the value of u_hat from the past vertex map
     float4x4 lastFrameToCurrentFrame = mul(transformInverse(lastFramePose), pose);
@@ -52,6 +53,12 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
     float3 pixelPos = float3(mul(cameraProjection, homogenousCoord).xy, 0);
     float3 v_hat = lastVertexMap.Load((int3)floor(pixelPos));
     float3 n_hat = lastNormalMap.Load((int3)floor(pixelPos));
+
+    float3 transformedNormal = mul(lastFramePose , float4(n,0)).xyz;
+
+    if (length(v_hat - v) > distanceThreshold || dot(normalize(n), normalize(n_hat)) > angleThreshold) {
+        return;
+    }
 
     float3x3 skewSymmetricCurrentV = float3x3(0, -v.z, v.y,
                                               v.z, 0, -v.x,

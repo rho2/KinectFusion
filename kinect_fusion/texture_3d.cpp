@@ -544,6 +544,44 @@ private:
     gpu_ini = true;
   }
 
+  void runICP(Matrix3f& cameraIntrinsics) {
+    Matrix4f estimatedPose = currentCameraToWorld;
+    //TODO: for n times load slang shader. run and get ata and atb to update estimatedPose
+    int n_iterations = 10;
+    for (int i = 0 ; i < n_iterations ; i ++) {
+        // TODO: load poses;
+        // TODO: load vertexMap, pastVertexMap, normalMap, pastNormalMap;
+
+        //TODO: run icp code
+
+        Matrix<float,6,6> ata;
+        Matrix<float,6,1> atb;
+
+        Vector<float,6> x;
+
+        JacobiSVD<MatrixXf> svd(ata, ComputeThinU | ComputeThinV);
+        x = svd.solve(atb);
+
+        float alpha = x(0), beta = x(1), gamma = x(2);
+
+        Matrix3f r = AngleAxisf(alpha, Vector3f::UnitX()).toRotationMatrix() *
+                            AngleAxisf(beta, Vector3f::UnitY()).toRotationMatrix() *
+                            AngleAxisf(gamma, Vector3f::UnitZ()).toRotationMatrix();
+
+        Vector3f t = x.tail(3);
+
+        // Build the pose matrix using the rotation and translation matrices
+        Matrix4f poseDelta = Matrix4f::Identity();
+        poseDelta.block(0, 0, 3, 3) = r;
+        poseDelta.block(0, 3, 3, 1) = t;
+
+        estimatedPose = poseDelta * estimatedPose;
+    }
+
+
+
+  }
+
 
   void destroyResources()
   {
