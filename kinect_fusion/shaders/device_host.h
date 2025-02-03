@@ -43,5 +43,5 @@ struct FrameInfo
 struct PerlinSettings
 {
     mat4 transform;
-    bool is_ini;
+    uint size;
 };

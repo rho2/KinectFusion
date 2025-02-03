@@ -20,6 +20,15 @@ target_link_libraries("vk_mini_${PROJECT_NAME}" PUBLIC helper)
 
 find_package(OpenMP)
 
+
+create_sample(fusion_exe
+    SOURCES fusion_main.cpp
+    SHADER_HEADERS ${SHD_DIR}/device_host.h
+    SHADER_SLANG ${SHD_DIR}/perlin.slang
+)
+target_link_libraries(vk_mini_fusion_exe PUBLIC helper)
+
 if (OpenMP_FOUND)
     target_link_libraries("vk_mini_${PROJECT_NAME}" PUBLIC OpenMP::OpenMP_CXX)
+    target_link_libraries(vk_mini_fusion_exe PUBLIC OpenMP::OpenMP_CXX)
 endif()
