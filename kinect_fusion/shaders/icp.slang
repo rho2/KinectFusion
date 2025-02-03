@@ -4,7 +4,7 @@
 
 
 // Input buffers for the current and predicted frames
-cbuffer FrameData : register(b0) {
+cbuffer FrameData {
     float4x4 pose;
     float4x4 lastFramePose;
     float3x3 cameraProjection;
@@ -13,12 +13,15 @@ cbuffer FrameData : register(b0) {
     float angleThreshold;         // Cosine of the angle threshold
 };
 
-Texture2D<float3>  currentVertexMap: register(t0);   // Input current vertexMap V_(u)
-Texture2D<float3> lastVertexMap : register(t1);      // Input last vertexMap Vhat
-Texture2D<float3> currentNormalMap : register(t2);  // Input current normalMap N_(u)
-Texture2D<float3> lastNormalMap : register(t3);     // Input past normalMap Nhat
-RWStructuredBuffer<float> ata : register(u0);       // Output ata
-RWStructuredBuffer<float> atb : register(u1);
+Texture2D<float3>  currentVertexMap;   // Input current vertexMap V_(u)
+Texture2D<float3> lastVertexMap;      // Input last vertexMap Vhat
+Texture2D<float3> currentNormalMap;  // Input current normalMap N_(u)
+Texture2D<float3> lastNormalMap;     // Input past normalMap Nhat
+RWStructuredBuffer<float> ata;       // Output ata
+RWStructuredBuffer<float> atb;
+
+ static uint[6][6] ata_global;
+ static int[6] atb_global;
 groupshared float[6][6] localATA[THREADS_PER_GROUP];
 groupshared float[6] localATB[THREADS_PER_GROUP];
 
@@ -37,6 +40,16 @@ float4x4 transformInverse(float4x4 transform) {
     );
 
     return inverseTransform;
+}
+
+void atomicAddAta(int x, int y, float value) {
+    int intValue = asint(value * 10000.0f);
+    InterlockedAdd(ata_global[x][y], intValue);
+}
+
+void atomicAddAtb(int address, float value) {
+    int intValue = asint(value * 10000.0f);
+    InterlockedAdd(atb_global[address], intValue);
 }
 
 
@@ -89,7 +102,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     float b = dot(n_hat, v_hat - v);
     [unroll]
     for (int i = 0; i < 6; i++) {
-        partialAtb[i] = b * at[i];
+        partialAtb[i] = b * at_array[i];
     }
 
     localATA[gtid.x] = partialAta;
@@ -115,27 +128,24 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     {
         for (int i = 0; i < 6; i++) {
             for (int j = 0; j < 6; j++) {
-                InterlockedAdd(ata[i * 6 + j], localATA[0][i][j]);
+                // InterlockedAdd(ata[i * 6 + j], localATA[0][i][j]);
+                atomicAddAta(i, j, localATA[0][i][j]);
             }
-            InterlockedAdd(atb[i], localATB[0][i]);
+            // InterlockedAdd(atb[i], localATB[0][i]);
+            atomicAddAtb(i, localATB[0][i]);
         }
-        // similarly for localATA[0].z, w, and localATB...
     }
 
-    
-    // float3 transformedNormal = mul(float4(v.normal, 0), pose).xyz;
-
-    // float distance = length(transformedVertex - u_hat.vertex);
-    // float angle = dot(normalize(transformedNormal), normalize(u_hat.normal));
-
-    //Check if omega is not nulll
-    // if (distance < distanceThreshold && angle > angleThreshold) {
-
-    //     // populate AtA and AtB
-    // }
-
-
-
-
+    AllMemoryBarrier();
+    if (threadId.x == 0 && threadId.y == 0 && threadId.z == 0) {
+        [unroll]
+        for (int i = 0; i < 6; i++) {
+            [unroll]
+            for (int j = 0; j < 6; j++) {
+                ata[i * 6 + j] = ata_global[i][j] / 10000.0f;
+            }
+            atb[i] = atb_global[i] / 10000.0f;
+        }
+    }
 
 }
