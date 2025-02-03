@@ -60,15 +60,13 @@ class Texture3dSample : public nvvkhl::IAppElement
   struct Settings
   {
     uint32_t             powerOfTwoSize = 8;
-    bool                 useGpu         = false;
     bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
     int                  headlight      = 1;
-    int                  currentIndex   = -2;
     glm::vec3            toLight        = {1.F, 1.F, 1.F};
-    int                  steps          = 500;
+    int                  steps          = 1000;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
     uint32_t             getSize() { return 1 << powerOfTwoSize; }
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
@@ -92,8 +90,12 @@ public:
               .instance       = app->getInstance(),
     });  // Allocator
     m_dutil       = std::make_unique<nvvk::DebugUtil>(m_device);
+    // m_dsetCompute = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_dsetRaster  = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
+
+    voxel_grid.resize(m_settings.getTotalSize());
+    std::fill(voxel_grid.begin(), voxel_grid.end(), 1.0f);
 
     createVkBuffers();
     createTextureBuffers();
@@ -134,19 +136,6 @@ public:
         "Render normals instead of pure image");
     PE::end();
 
-    PE::begin();
-    if (PE::Button("Next Frame", {-1, 20})) {
-      redoTexture = TRUE;
-    }
-    PE::end();
-
-    PE::begin();
-    if (PE::Button("Reset Index", {-1, 20})) {
-      m_settings.currentIndex = -2;
-      redoTexture = TRUE;
-    }
-    PE::end();
-
     if(redoTexture)
     {
       vkDeviceWaitIdle(m_device);
@@ -154,7 +143,6 @@ public:
     }
 
     ImGui::TextDisabled("%d FPS / %.3fms", static_cast<int>(ImGui::GetIO().Framerate), 1000.F / ImGui::GetIO().Framerate);
-    ImGui::TextDisabled("Current Frame: %d ", static_cast<int>(m_settings.currentIndex));
     ImGui::End();
 
     // Using viewport Window
@@ -235,7 +223,6 @@ public:
   }
 
 private:
-
   void createTextureBuffers() {
     assert(!m_texture.image);
 
@@ -296,31 +283,24 @@ private:
                                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
-  void fillPerlinImage(std::vector<float>& imageData)
+  void fillPerlinImage()
   {
     nvh::ScopedTimer st(__FUNCTION__);
     uint32_t realSize = m_settings.getSize();
-    imageData.reserve(realSize);
+    voxel_grid.reserve(realSize);
 
-    if (m_settings.currentIndex < 0) {
-      std::fill(imageData.begin(), imageData.end(), 1000);
-    } else {
-      std::ostringstream filename;
-      filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << m_settings.currentIndex << ".bin";
+    std::ostringstream filename;
+    filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << 0 << ".bin";
 
-      std::ifstream file(filename.str(), std::ios::binary);
+    std::ifstream file(filename.str(), std::ios::binary);
 
-      if (!file) {
-        std::cerr << "Error opening file: " << filename.str() << std::endl;
-        return;
-      }
-
-      file.read(reinterpret_cast<char*>(imageData.data()), realSize * sizeof(float));
-
-      std::cout << "Read file: " << filename.str() << "\n";
+    if (!file) {
+      std::cerr << "Error opening file: " << filename.str() << std::endl;
+      return;
     }
 
-    m_settings.currentIndex += 1;
+    file.read(reinterpret_cast<char*>(voxel_grid.data()), voxel_grid.size() * sizeof(float));
+    std::cout << "Read file: " << filename.str() << "\n";
   }
 
   void setData(VkCommandBuffer cmd)
@@ -330,17 +310,17 @@ private:
 
     uint32_t realSize = m_settings.getSize();
 
-      fillPerlinImage(voxel_grid);
+    fillPerlinImage();
 
-      const VkOffset3D               offset{0};
-      const VkImageSubresourceLayers subresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      const VkExtent3D               extent{realSize, realSize, realSize};
-      nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    const VkOffset3D               offset{0};
+    const VkImageSubresourceLayers subresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    const VkExtent3D               extent{realSize, realSize, realSize};
+    nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-      nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
-      staging->cmdToImage(cmd, m_texture.image, offset, extent, subresource, voxel_grid.size() * sizeof(float), voxel_grid.data());
+    nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
+    staging->cmdToImage(cmd, m_texture.image, offset, extent, subresource, voxel_grid.size() * sizeof(float), voxel_grid.data());
 
-      nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
 
     m_dirty = false;
   }
@@ -409,6 +389,7 @@ private:
     pgen.addShader(shaderModule, VK_SHADER_STAGE_VERTEX_BIT, "vertexMain");
     pgen.addShader(shaderModule, VK_SHADER_STAGE_FRAGMENT_BIT, "fragmentMain");
 
+
     m_graphicsPipeline = pgen.createPipeline();
     m_dutil->setObjectName(m_graphicsPipeline, "Graphics");
     pgen.clearShaders();
@@ -422,8 +403,6 @@ private:
   VkDevice        m_device          = VK_NULL_HANDLE;
   VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
   bool            m_dirty           = false;
-
-  std::vector<float> voxel_grid;
 
   std::unique_ptr<nvvkhl::AllocVma>             m_alloc;
   std::unique_ptr<nvvk::DebugUtil>              m_dutil;
@@ -444,6 +423,8 @@ private:
   VkFormat          m_depthFormat      = VK_FORMAT_X8_D24_UNORM_PACK32;  // Depth format of the depth buffer
   VkPipeline        m_graphicsPipeline = VK_NULL_HANDLE;                 // The graphic pipeline to render
   VkClearColorValue m_clearColor       = {{0.3F, 0.3F, 0.3F, 1.0F}};     // Clear color
+
+  std::vector<float> voxel_grid;
 };
 
 int main(int argc, char** argv)

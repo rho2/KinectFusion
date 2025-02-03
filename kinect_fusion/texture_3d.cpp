@@ -377,7 +377,6 @@ private:
 
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
 
-    #pragma omp parallel for collapse(3) schedule(auto)
     for (unsigned int k = 0; k < 256; k++) {
       for (unsigned int j = 0; j < 256; j++) {
         for (unsigned int i = 0; i < 256; i++) {
@@ -509,7 +508,6 @@ private:
     if (sensor.m_currentIdx < 0) return;
 
     DH::PerlinSettings perlin   = m_settings.perlin;
-    perlin.is_ini = gpu_ini;
 
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
     for (int i = 0; i < 4; ++i) {
