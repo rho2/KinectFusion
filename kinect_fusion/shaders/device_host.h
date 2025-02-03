@@ -45,3 +45,12 @@ struct PerlinSettings
     mat4 transform;
     uint size;
 };
+
+struct ICPSettings {
+    mat4 pose;
+    mat4 lastFramePose;
+    mat3 cameraProjection;
+    uint width;
+    float distanceThreshold;      // Distance threshold for correspondence
+    float angleThreshold;         // Cosine of the angle threshold
+};

@@ -1,27 +1,20 @@
+#version 460
 
 #define GROUPDIMENSION 16
 #define THREADS_PER_GROUP (GROUPDIMENSION * GROUPDIMENSION)
 
+#include "device_host.h"
 
 // Input buffers for the current and predicted frames
-cbuffer FrameData {
-    float4x4 pose;
-    float4x4 lastFramePose;
-    float3x3 cameraProjection;
-    int width;
-    float distanceThreshold;      // Distance threshold for correspondence
-    float angleThreshold;         // Cosine of the angle threshold
-};
+[[vk::push_constant]] ConstantBuffer<ICPSettings> icpSettings;
 
 Texture2D<float3>  currentVertexMap;   // Input current vertexMap V_(u)
 Texture2D<float3> lastVertexMap;      // Input last vertexMap Vhat
 Texture2D<float3> currentNormalMap;  // Input current normalMap N_(u)
 Texture2D<float3> lastNormalMap;     // Input past normalMap Nhat
-RWStructuredBuffer<float> ata;       // Output ata
-RWStructuredBuffer<float> atb;
+RWStructuredBuffer<float[6][6]> ata;       // Output ata
+RWStructuredBuffer<float[6]> atb;
 
- static uint[6][6] ata_global;
- static int[6] atb_global;
 groupshared float[6][6] localATA[THREADS_PER_GROUP];
 groupshared float[6] localATB[THREADS_PER_GROUP];
 
@@ -42,37 +35,27 @@ float4x4 transformInverse(float4x4 transform) {
     return inverseTransform;
 }
 
-void atomicAddAta(int x, int y, float value) {
-    int intValue = asint(value * 10000.0f);
-    InterlockedAdd(ata_global[x][y], intValue);
-}
-
-void atomicAddAtb(int address, float value) {
-    int intValue = asint(value * 10000.0f);
-    InterlockedAdd(atb_global[address], intValue);
-}
-
 
 [shader("compute")]
 [numthreads(GROUPDIMENSION, 1, 1)]
-void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThreadID) {
-    uint index = threadId.x + threadId.y * width;
+void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThreadID, uint3 GId: SV_GroupID) {
+    uint index = threadId.x + threadId.y * icpSettings.width;
     uint2 pixelCoord = threadId.xy;
 
     float3 v = currentVertexMap.Load(int3(pixelCoord, 0));
     float3 n = currentNormalMap.Load(int3(pixelCoord, 0));
     // VertexNormal u_hat = predictedFrame[index];
     // compute v_hat calculate t_(k-1,k). bring in to camera image space. apply perspective. we now have u_hat. check the value of u_hat from the past vertex map
-    float4x4 lastFrameToCurrentFrame = mul(transformInverse(lastFramePose), pose);
+    float4x4 lastFrameToCurrentFrame = mul(transformInverse(icpSettings.lastFramePose), icpSettings.pose);
     float3 currentVertexInLasFrame = mul(lastFrameToCurrentFrame, float4(v, 1.0)).xyz;
     float3 homogenousCoord = float3(currentVertexInLasFrame.x / currentVertexInLasFrame.z, currentVertexInLasFrame.y / currentVertexInLasFrame.z, 1.0);
-    float3 pixelPos = float3(mul(cameraProjection, homogenousCoord).xy, 0);
+    float3 pixelPos = float3(mul(icpSettings.cameraProjection, homogenousCoord).xy, 0);
     float3 v_hat = lastVertexMap.Load((int3)floor(pixelPos));
     float3 n_hat = lastNormalMap.Load((int3)floor(pixelPos));
 
-    float3 transformedNormal = mul(lastFramePose , float4(n,0)).xyz;
+    float3 transformedNormal = mul(icpSettings.lastFramePose , float4(n,0)).xyz;
 
-    if (length(v_hat - v) > distanceThreshold || dot(normalize(n), normalize(n_hat)) > angleThreshold) {
+    if (length(v_hat - v) > icpSettings.distanceThreshold || dot(normalize(n), normalize(n_hat)) > icpSettings.angleThreshold) {
         return;
     }
 
@@ -129,22 +112,12 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
         for (int i = 0; i < 6; i++) {
             for (int j = 0; j < 6; j++) {
                 // InterlockedAdd(ata[i * 6 + j], localATA[0][i][j]);
-                atomicAddAta(i, j, localATA[0][i][j]);
+                ata[GId.x][i][j] += localATA[0][i][j];
+                // atomicAddAta(i, j, localATA[0][i][j]);
             }
             // InterlockedAdd(atb[i], localATB[0][i]);
-            atomicAddAtb(i, localATB[0][i]);
-        }
-    }
-
-    AllMemoryBarrier();
-    if (threadId.x == 0 && threadId.y == 0 && threadId.z == 0) {
-        [unroll]
-        for (int i = 0; i < 6; i++) {
-            [unroll]
-            for (int j = 0; j < 6; j++) {
-                ata[i * 6 + j] = ata_global[i][j] / 10000.0f;
-            }
-            atb[i] = atb_global[i] / 10000.0f;
+            atb[GId.x][i] += localATB[0][i];
+            // atomicAddAtb(i, localATB[0][i]);
         }
     }
 

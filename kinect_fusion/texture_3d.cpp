@@ -567,7 +567,7 @@ private:
     if (sensor.m_currentIdx < 0) return;
 
     DH::PerlinSettings perlin   = m_settings.perlin;
-    perlin.is_ini = gpu_ini;
+    // perlin.is_ini = gpu_ini;
 
     Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
     for (int i = 0; i < 4; ++i) {

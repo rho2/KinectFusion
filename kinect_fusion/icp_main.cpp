@@ -1,3 +1,4 @@
+
 #if defined(_WIN32)
 #include "windows.h"
 #endif
@@ -13,9 +14,8 @@ namespace DH {
 #include "shaders/device_host.h"  // Shared between host and device
 }  // namespace DH
 
-#include "_autogen/perlin_slang.h"
-const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
-
+#include "_autogen/icp_slang.h"
+const auto& icp_shd = std::vector<uint32_t>{std::begin(icpSlang), std::end(icpSlang)};
 
 void DumpToFile(const void* Data, const uint32_t size, const std::string& prefix, const uint32_t index) {
     std::ostringstream filename;
@@ -30,7 +30,7 @@ void DumpToFile(const void* Data, const uint32_t size, const std::string& prefix
 
 int main() {
     VirtualSensor sensor;
-    if (!sensor.Init("../Data/rgbd_dataset_freiburg1_xyz/")) {
+    if (!sensor.Init("../../../Data/rgbd_dataset_freiburg1_xyz/")) {
         std::cout << "Failed to initialize the sensor!\nCheck file path!" << std::endl;
         exit(1);
     }
@@ -38,14 +38,17 @@ int main() {
     const size_t size = 8;
     const size_t byte_size = size * size * size * sizeof(float);
 
-    VulkanWrapper vulkanWrapper{"VolumetricFusion"};
+    VulkanWrapper vulkanWrapper{"ICP"};
 
-    auto& BufferVoxelGrid = vulkanWrapper.addBuffer(byte_size);
-    auto& BufferVoxelGridWeights = vulkanWrapper.addBuffer(byte_size);
+    auto& BufferCurrentVertexMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    auto& BuffferLastVertexMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
 
-    auto& BufferDepthMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    auto& BufferNormalMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    auto& BufferLastNormalMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    auto& BufferAta = vulkanWrapper.addBuffer(6 * 6 * sizeof(float));
+    auto& BufferAtb = vulkanWrapper.addBuffer(6 * sizeof(float));
 
-    vulkanWrapper.createPipeline(sizeof(DH::PerlinSettings), comp_shd, "computeMain");
+    vulkanWrapper.createPipeline(sizeof(DH::ICPSettings), icp_shd, "ICPCalcMain");
 
     std::cout << "Start to process\n";
     std::cout << "================================================================================================\n";
@@ -56,7 +59,7 @@ int main() {
     while (sensor.ProcessNextFrame()) {
         // BufferDepthMap.fillWith(sensor.GetDepth());
         {
-            auto P = BufferDepthMap.map<float>();
+            auto P = BufferNormalMap.map<float>();
             P[0] = 98.76;
             P[1] = 12.34;
         }
@@ -64,8 +67,8 @@ int main() {
         auto& CmdBuffer = vulkanWrapper.startCommandBuffer();
 
         if (sensor.m_increment == 0) {
-            CmdBuffer.fillBuffer(*BufferVoxelGrid._buffer, 0, byte_size, 0);
-            CmdBuffer.fillBuffer(*BufferVoxelGridWeights._buffer, 0, byte_size, 0);
+            CmdBuffer.fillBuffer(*BufferCurrentVertexMap._buffer, 0, byte_size, 0);
+            CmdBuffer.fillBuffer(*BuffferLastVertexMap._buffer, 0, byte_size, 0);
         }
 
         Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
@@ -78,15 +81,16 @@ int main() {
         vulkanWrapper.addCommandPushConstants(perlinSettings);
         vulkanWrapper.submitAndWait(size, size, size);
         {
-            auto P = BufferVoxelGrid.map<float>();
+            auto P = BufferCurrentVertexMap.map<float>();
             DumpToFile(P.data, byte_size, "sdf_values", sensor.m_currentIdx);
         }
 
         {
-            auto P = BufferVoxelGridWeights.map<float>();
+            auto P = BuffferLastVertexMap.map<float>();
             DumpToFile(P.data, byte_size, "sdf_weights", sensor.m_currentIdx);
         }
 
         break;
     }
 }
+
