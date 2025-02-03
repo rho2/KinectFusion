@@ -113,6 +113,7 @@ public:
     });  // Allocator
     m_dutil       = std::make_unique<nvvk::DebugUtil>(m_device);
     m_dsetCompute = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
+    m_dsetICP = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_dsetRaster  = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
@@ -479,6 +480,40 @@ private:
   {
     nvvk::DebugUtil dbg(m_device);
 
+    // ICP pipeline
+    auto& icp_d = m_dsetICP;
+    icp_d->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    icp_d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+    //TODO: add binding types
+    icp_d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
+    m_dutil->DBG_NAME(icp_d->getLayout());
+
+    //TODO: change the range to the correct size
+    VkPushConstantRange icp_push_constant_ranges = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings)};
+    icp_d->initPipeLayout(1, &icp_push_constant_ranges);
+    m_dutil->DBG_NAME(icp_d->getPipeLayout());
+
+
+    VkPipelineShaderStageCreateInfo icp_stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    icp_stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    icp_stage_info.module = nvvk::createShaderModule(m_device, icp_shd);
+    icp_stage_info.pName  = "ICPCalcMain";
+
+    VkComputePipelineCreateInfo icp_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    icp_info.layout = icp_d->getPipeLayout();
+    icp_info.stage  = icp_stage_info;
+
+    vkCreateComputePipelines(m_device, {}, 1, &icp_info, nullptr, &m_icpPipeline);
+    m_dutil->DBG_NAME(m_icpPipeline);
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    vkBeginCommandBuffer(m_icpCmdBuffer, &beginInfo);
+
+    vkCmdBindPipeline(m_icpCmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_icpPipeline);
+
+    // VkDescriptorSet 
+
+    // Compute pipeline
     auto& d = m_dsetCompute;
     d->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
     d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -491,20 +526,6 @@ private:
 
     d->initPipeLayout(1, &push_constant_ranges);
     m_dutil->DBG_NAME(d->getPipeLayout());
-
-
-    //icp part
-    VkPipelineShaderStageCreateInfo icp_stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    icp_stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-    icp_stage_info.module = nvvk::createShaderModule(m_device, icp_shd);
-    icp_stage_info.pName  = "ICPCalcMain";
-
-    VkComputePipelineCreateInfo icp_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    icp_info.layout = d->getPipeLayout();
-    icp_info.stage  = icp_stage_info;
-
-    vkCreateComputePipelines(m_device, {}, 1, &icp_info, nullptr, &m_icpPipeline);
-
 
     VkPipelineShaderStageCreateInfo stage_info{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stage_info.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -525,8 +546,7 @@ private:
 
   void runCompute(VkCommandBuffer cmd, const VkExtent3D& size)
   {
-    //TODO: run icp code
-    VkCommandBuffer icp_cmd = m_app->createTempCmdBuffer();
+    //TODO: run icp code, get the ata and atb, update the estimatedPose
     
 
 
@@ -689,13 +709,15 @@ private:
   VkDevice        m_device          = VK_NULL_HANDLE;
   VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
   VkPipeline      m_computePipeline = VK_NULL_HANDLE;  // The graphic pipeline to render
-  VkPipeline      m_icpPipeline = VK_NULL_HANDLE;  // The graphic pipeline to render
+  VkPipeline      m_icpPipeline = VK_NULL_HANDLE;  // The icp pipeline
+  VkCommandBuffer m_icpCmdBuffer;
   bool            m_dirty           = false;
 
   std::unique_ptr<nvvkhl::AllocVma>             m_alloc;
   std::unique_ptr<nvvk::DebugUtil>              m_dutil;
   std::unique_ptr<nvvk::DescriptorSetContainer> m_dsetRaster;   // Holding the descriptor set information
   std::unique_ptr<nvvk::DescriptorSetContainer> m_dsetCompute;  // Holding the descriptor set information
+  std::unique_ptr<nvvk::DescriptorSetContainer> m_dsetICP;  // Holding the descriptor set information
   std::unique_ptr<nvvkhl::GBuffer>              m_gBuffers;     // G-Buffers: color + depth
 
   nvvk::Buffer m_vertices;  // Buffer of the vertices

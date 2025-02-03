@@ -1,5 +1,6 @@
 
 #define GROUPDIMENSION 16
+#define THREADS_PER_GROUP (GROUPDIMENSION * GROUPDIMENSION)
 
 
 // Input buffers for the current and predicted frames
@@ -16,8 +17,10 @@ Texture2D<float3>  currentVertexMap: register(t0);   // Input current vertexMap 
 Texture2D<float3> lastVertexMap : register(t1);      // Input last vertexMap Vhat
 Texture2D<float3> currentNormalMap : register(t2);  // Input current normalMap N_(u)
 Texture2D<float3> lastNormalMap : register(t3);     // Input past normalMap Nhat
-RWStructuredBuffer<float[6]> ata : register(u0);       // Output ata
-RWStructuredBuffer<float[6]> atb : register(u1);
+RWStructuredBuffer<float> ata : register(u0);       // Output ata
+RWStructuredBuffer<float> atb : register(u1);
+groupshared float[6][6] localATA[THREADS_PER_GROUP];
+groupshared float[6] localATB[THREADS_PER_GROUP];
 
 float4x4 transformInverse(float4x4 transform) {
     float3x3 rotation = (float3x3)transform; // Extract the 3x3 rotation part
@@ -38,8 +41,8 @@ float4x4 transformInverse(float4x4 transform) {
 
 
 [shader("compute")]
-[numthreads(GROUPDIMENSION, GROUPDIMENSION, 1)]
-void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
+[numthreads(GROUPDIMENSION, 1, 1)]
+void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThreadID) {
     uint index = threadId.x + threadId.y * width;
     uint2 pixelCoord = threadId.xy;
 
@@ -67,10 +70,13 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
     float3 at_0 = mul(skewSymmetricCurrentV, n_hat);
     float at_array[6] = { at_0.x, at_0.y, at_0.z, n_hat.x, n_hat.y, n_hat.z };
 
+
+    float partialAta[6][6];
     [unroll]
     for (int i = 0; i < 6; i++) {
+        [unroll]
         for (int j = 0; j < 6; j++) {
-            ata[index][i * 6 + j] = at_array[i] * at_array[j];
+            partialAta[i][j] = at_array[i] * at_array[j];
         }
     }
     
@@ -78,11 +84,42 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID) {
     // TODO: check this matrix( 6?)
     matrix<float, 6, 1> at;
     
-    float b = dot(n_hat, v_hat - v);
+    float partialAtb[6];
 
+    float b = dot(n_hat, v_hat - v);
     [unroll]
     for (int i = 0; i < 6; i++) {
-        atb[index][i] = b * at[i];
+        partialAtb[i] = b * at[i];
+    }
+
+    localATA[gtid.x] = partialAta;
+    localATB[gtid.x] = partialAtb;
+
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint s = GROUPDIMENSION / 2; s > 0; s >>= 1) {
+        if (gtid.x < s) {
+            [unroll]
+            for (int i = 0; i < 6; i++) {
+                [unroll]
+                for (int j = 0; j < 6; j++) {
+                    localATA[gtid.x][i][j] += localATA[gtid.x + s][i][j];
+                }
+                localATB[gtid.x][i] += localATB[gtid.x + s][i];
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if (gtid.x == 0)
+    {
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < 6; j++) {
+                InterlockedAdd(ata[i * 6 + j], localATA[0][i][j]);
+            }
+            InterlockedAdd(atb[i], localATB[0][i]);
+        }
+        // similarly for localATA[0].z, w, and localATB...
     }
 
     
