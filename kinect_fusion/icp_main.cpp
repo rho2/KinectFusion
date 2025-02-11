@@ -53,8 +53,16 @@ int main() {
     std::cout << "Start to process\n";
     std::cout << "================================================================================================\n";
 
-    DH::PerlinSettings perlinSettings{};
-    perlinSettings.size = size;
+    DH::ICPSettings icpSettings{};
+    // perlinSettings.size = size;
+    sensor.ProcessNextFrame();
+    Matrix4f lastFrame {sensor.GetTrajectory()};
+    for (int i = 0 ; i < 4 ; i ++) {
+        icpSettings.lastFramePose[i].x = sensor.GetTrajectory().row(i).x();
+        icpSettings.lastFramePose[i].y = sensor.GetTrajectory().row(i).y();
+        icpSettings.lastFramePose[i].z = sensor.GetTrajectory().row(i).z();
+        icpSettings.lastFramePose[i].w = sensor.GetTrajectory().row(i).w();
+    }
 
     while (sensor.ProcessNextFrame()) {
         // BufferDepthMap.fillWith(sensor.GetDepth());
@@ -71,14 +79,25 @@ int main() {
             CmdBuffer.fillBuffer(*BuffferLastVertexMap._buffer, 0, byte_size, 0);
         }
 
-        Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+        Matrix4f foo = lastFrame;
         for (int i = 0; i < 4; ++i) {
-            perlinSettings.transform[i].x = foo.row(i).x();
-            perlinSettings.transform[i].y = foo.row(i).y();
-            perlinSettings.transform[i].z = foo.row(i).z();
-            perlinSettings.transform[i].w = foo.row(i).w();
+            icpSettings.pose[i].x = lastFrame.row(i).x();
+            icpSettings.pose[i].y = lastFrame.row(i).y();
+            icpSettings.pose[i].z = lastFrame.row(i).z();
+            icpSettings.pose[i].w = lastFrame.row(i).w();
         }
-        vulkanWrapper.addCommandPushConstants(perlinSettings);
+        Matrix3f intrinsics = sensor.GetDepthIntrinsics();
+        for (int i = 0; i < 3; ++i) {
+            icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
+            icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
+            icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
+        }
+        icpSettings.width = 640;
+        icpSettings.distanceThreshold = 0.1f;
+        icpSettings.angleThreshold = 0.1f;
+
+
+        vulkanWrapper.addCommandPushConstants(icpSettings);
         vulkanWrapper.submitAndWait(size, size, size);
         {
             auto P = BufferCurrentVertexMap.map<float>();
