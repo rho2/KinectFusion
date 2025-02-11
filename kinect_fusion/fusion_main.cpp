@@ -7,43 +7,77 @@
 
 #include <cstdio>
 #include <iomanip>
+#include <glm/ext/matrix_transform.hpp>
 
 namespace DH {
     using namespace glm;
 #include "shaders/device_host.h"  // Shared between host and device
-}  // namespace DH
+} // namespace DH
 
 #include "_autogen/perlin_slang.h"
-const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
+const auto &comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
 
+#include <chrono>
 
-void DumpToFile(const void* Data, const uint32_t size, const std::string& prefix, const uint32_t index) {
+class Stopwatch {
+    std::chrono::high_resolution_clock::time_point start_time;
+
+public:
+    Stopwatch() {
+        start_time = std::chrono::high_resolution_clock::now();
+    }
+
+    double end() {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration = end_time - start_time;
+        std::cout << "Elapsed time: " << duration.count() << " milliseconds" << std::endl;
+        return duration.count();
+    }
+};
+
+void DumpToFile(const void *Data, const uint32_t size, const std::string &prefix, const uint32_t index) {
     std::ostringstream filename;
     filename << prefix << "_" << std::setw(4) << std::setfill('0') << index << ".bin";
 
     std::ofstream file(filename.str(), std::ios::binary);
-    file.write(reinterpret_cast<const char*>(Data), size);
+    file.write(reinterpret_cast<const char *>(Data), size);
     file.close();
 
     std::cout << "Wrote: " << filename.str() << std::endl;
 }
 
-int main() {
+int main(int argc, char **argv) {
     VirtualSensor sensor;
-    if (!sensor.Init("../Data/rgbd_dataset_freiburg1_xyz/")) {
+
+    const char *file = "../Data/rgbd_dataset_freiburg1_xyz/";
+    if (argc > 2) {
+        file = argv[1];
+    }
+
+    if (!sensor.Init(file)) {
         std::cout << "Failed to initialize the sensor!\nCheck file path!" << std::endl;
         exit(1);
     }
 
-    const size_t size = 8;
+    const size_t size = 256;
     const size_t byte_size = size * size * size * sizeof(float);
 
     VulkanWrapper vulkanWrapper{"VolumetricFusion"};
 
-    auto& BufferVoxelGrid = vulkanWrapper.addBuffer(byte_size);
-    auto& BufferVoxelGridWeights = vulkanWrapper.addBuffer(byte_size);
+    auto &BufferVoxelGrid = vulkanWrapper.addBuffer(byte_size);
+    auto &BufferVoxelGridWeights = vulkanWrapper.addBuffer(byte_size);
 
-    auto& BufferDepthMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    {
+        auto P = BufferVoxelGrid.map<float>();
+        for (auto i = 0; i < size * size * size; ++i) { P[i] = 0.1f; }
+    }
+
+    {
+        auto P = BufferVoxelGridWeights.map<float>();
+        for (auto i = 0; i < size * size * size; ++i) { P[i] = 0.0f; }
+    }
+
+    auto &BufferDepthMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
 
     vulkanWrapper.createPipeline(sizeof(DH::PerlinSettings), comp_shd, "computeMain");
 
@@ -53,40 +87,35 @@ int main() {
     DH::PerlinSettings perlinSettings{};
     perlinSettings.size = size;
 
+
+    double sum = 0.0;
+    int count = 0;
+
     while (sensor.ProcessNextFrame()) {
-        // BufferDepthMap.fillWith(sensor.GetDepth());
-        {
-            auto P = BufferDepthMap.map<float>();
-            P[0] = 98.76;
-            P[1] = 12.34;
-        }
+        Stopwatch watch{};
 
-        auto& CmdBuffer = vulkanWrapper.startCommandBuffer();
+        BufferDepthMap.fillWith(sensor.GetDepth());
 
-        if (sensor.m_increment == 0) {
-            CmdBuffer.fillBuffer(*BufferVoxelGrid._buffer, 0, byte_size, 0);
-            CmdBuffer.fillBuffer(*BufferVoxelGridWeights._buffer, 0, byte_size, 0);
-        }
+        auto &CmdBuffer = vulkanWrapper.startCommandBuffer();
 
-        Matrix4f foo = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
-        for (int i = 0; i < 4; ++i) {
-            perlinSettings.transform[i].x = foo.row(i).x();
-            perlinSettings.transform[i].y = foo.row(i).y();
-            perlinSettings.transform[i].z = foo.row(i).z();
-            perlinSettings.transform[i].w = foo.row(i).w();
-        }
+        Matrix4f transform = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
+
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j)
+                perlinSettings.transform[i][j] = transform(j, i);
+;
+
         vulkanWrapper.addCommandPushConstants(perlinSettings);
         vulkanWrapper.submitAndWait(size, size, size);
-        {
-            auto P = BufferVoxelGrid.map<float>();
-            DumpToFile(P.data, byte_size, "sdf_values", sensor.m_currentIdx);
-        }
 
-        {
-            auto P = BufferVoxelGridWeights.map<float>();
-            DumpToFile(P.data, byte_size, "sdf_weights", sensor.m_currentIdx);
-        }
+        sum += watch.end();
+        count++;
+    }
 
-        break;
+    std::cout << sum/count << std::endl;
+
+    {
+        auto P = BufferVoxelGrid.map<float>();
+        DumpToFile(P.data, byte_size, "sdf_values", 0);
     }
 }
