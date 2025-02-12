@@ -28,7 +28,7 @@ void DumpToFile(const void* Data, const uint32_t size, const std::string& prefix
     std::cout << "Wrote: " << filename.str() << std::endl;
 }
 
-void FillVertexNormalMap(std::vector<Vector3f>& targetMap, std::vector<Vector3f>& targetNormalMap, const Matrix4f& depthExtrinsics, const Matrix3f& depthIntrinsics, const float* depthMap, const int width, const int height) {
+void FillVertexNormalMap(std::vector<Vector4f>& targetMap, std::vector<Vector4f>& targetNormalMap, const Matrix4f& depthExtrinsics, const Matrix3f& depthIntrinsics, const float* depthMap, const int width, const int height) {
     const float maxDistance = 1000;
     float fovX = depthIntrinsics(0, 0);
     float fovY = depthIntrinsics(1, 1);
@@ -50,11 +50,11 @@ void FillVertexNormalMap(std::vector<Vector3f>& targetMap, std::vector<Vector3f>
             unsigned int idx = v * width + u; // linearized index
             float depth = depthMap[idx];
             if (depth == MINF) {
-                targetMap[idx] = Vector3f(MINF, MINF, MINF);
+                targetMap[idx] = Vector4f(MINF, MINF, MINF, MINF);
             }
             else {
                 // Back-projection to camera space.
-                targetMap[idx] = rotationInv * Vector3f((u - cX) / fovX * depth, (v - cY) / fovY * depth, depth) + translationInv;
+                targetMap[idx] = (rotationInv * Vector3f((u - cX) / fovX * depth, (v - cY) / fovY * depth, depth) + translationInv).homogeneous();
             }
         }
     }
@@ -67,25 +67,32 @@ void FillVertexNormalMap(std::vector<Vector3f>& targetMap, std::vector<Vector3f>
                 const float du = 0.5f * (depthMap[idx + 1] - depthMap[idx - 1]);
                 const float dv = 0.5f * (depthMap[idx + width] - depthMap[idx - width]);
                 if (!std::isfinite(du) || !std::isfinite(dv) || abs(du) > maxDistanceHalved || abs(dv) > maxDistanceHalved) {
-                    targetNormalMap[idx] = Vector3f(MINF, MINF, MINF);
+                    targetNormalMap[idx] = Vector4f(MINF, MINF, MINF, MINF);
                     continue;
                 }
 
-                targetNormalMap[idx] = (targetMap[idx + 1] - targetMap[idx - 1]).cross(targetMap[idx + width] - targetMap[idx - width]);
-                targetNormalMap[idx].normalize();
+                Vector3f normal {(targetMap[idx + 1].head<3>() - targetMap[idx - 1].head<3>()).cross(targetMap[idx + width].head<3>() - targetMap[idx - width].head<3>())};
+                normal.normalize();
+                targetNormalMap[idx] = Vector4f(normal.x(), normal.y(), normal.z(), 0.f);
             }
         }
 
         // We set invalid normals for border regions.
         for (int u = 0; u < width; ++u) {
-            targetNormalMap[u] = Vector3f(MINF, MINF, MINF);
-            targetNormalMap[u + (height - 1) * width] = Vector3f(MINF, MINF, MINF);
+            targetNormalMap[u] = Vector4f(MINF, MINF, MINF, MINF);
+            targetNormalMap[u + (height - 1) * width] = Vector4f(MINF, MINF, MINF, MINF);
         }
         for (int v = 0; v < height; ++v) {
-            targetNormalMap[v * width] = Vector3f(MINF, MINF, MINF);
-            targetNormalMap[(width - 1) + v * width] = Vector3f(MINF, MINF, MINF);
+            targetNormalMap[v * width] = Vector4f(MINF, MINF, MINF, MINF);
+            targetNormalMap[(width - 1) + v * width] = Vector4f(MINF, MINF, MINF, MINF);
         }
 
+}
+
+void printVector(std::vector<Vector4f> vec) {
+    for (int i = 0; i < vec.size(); i++) {
+        std::cout << vec[i].x() << " " << vec[i].y() << " " << vec[i].z() << " " << vec[i].w() << std::endl;
+    }
 }
 
 int main() {
@@ -99,17 +106,18 @@ int main() {
     const size_t byte_size = size * size * size * sizeof(float);
     const size_t width = 640;
     const size_t height = 480;
+    const size_t groupCount = 640 * 480 / 16;
 
     VulkanWrapper vulkanWrapper{"ICP"};
 
 
-    const size_t mapSize = width * height * 3 * sizeof(float);
+    const size_t mapSize = width * height * 4 * sizeof(float);
     auto& BufferCurrentVertexMap = vulkanWrapper.addBuffer(mapSize);
     auto& BuffferLastVertexMap = vulkanWrapper.addBuffer(mapSize);
     auto& BufferNormalMap = vulkanWrapper.addBuffer(mapSize);
     auto& BufferLastNormalMap = vulkanWrapper.addBuffer(mapSize);
-    auto& BufferAta = vulkanWrapper.addBuffer(6 * 6 * sizeof(float));
-    auto& BufferAtb = vulkanWrapper.addBuffer(6 * sizeof(float));
+    auto& BufferAta = vulkanWrapper.addBuffer(groupCount * 6 * 6 * sizeof(float));
+    auto& BufferAtb = vulkanWrapper.addBuffer(groupCount * 6 * sizeof(float));
 
     vulkanWrapper.createPipeline(sizeof(DH::ICPSettings), icp_shd, "ICPCalcMain");
 
@@ -127,14 +135,25 @@ int main() {
         icpSettings.lastFramePose[i].w = sensor.GetTrajectory().row(i).w();
     }
 
-    std::vector<Vector3f> initialVertexMap(width * height);
-    std::vector<Vector3f> initialNormalMap(width * height);
+    {
+        auto P = BufferAta.map<float>();
+        for (auto i = 0; i < groupCount * 6 * 6; ++i) { P[i] = 0.0f; }
+    }
+
+    {
+        auto P = BufferAtb.map<float>();
+        for (auto i = 0; i < groupCount * 6; ++i) { P[i] = 0.0f; }
+    }
+
+
+    std::vector<Vector4f> initialVertexMap(width * height);
+    std::vector<Vector4f> initialNormalMap(width * height);
     FillVertexNormalMap(initialVertexMap, initialNormalMap, sensor.GetDepthExtrinsics(), sensor.GetDepthIntrinsics(), sensor.GetDepth(), width, height);
 
     while (sensor.ProcessNextFrame()) {
 
-        std::vector<Vector3f> vertexMap(width * height);
-        std::vector<Vector3f> normalMap(width * height);
+        std::vector<Vector4f> vertexMap(width * height);
+        std::vector<Vector4f> normalMap(width * height);
         FillVertexNormalMap(vertexMap, normalMap, sensor.GetDepthExtrinsics(), sensor.GetDepthIntrinsics(), sensor.GetDepth(), width, height);
         BufferCurrentVertexMap.fillWith(vertexMap.data());
         BuffferLastVertexMap.fillWith(initialVertexMap.data());
@@ -156,26 +175,38 @@ int main() {
             icpSettings.pose[i].w = lastFrame.row(i).w();
         }
         Matrix3f intrinsics = sensor.GetDepthIntrinsics();
-        for (int i = 0; i < 3; ++i) {
-            icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
-            icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
-            icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
-        }
+        // for (int i = 0; i < 3; ++i) {
+        //     icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
+        //     icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
+        //     icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
+        // }
         icpSettings.width = 640;
         icpSettings.distanceThreshold = 0.1f;
         icpSettings.angleThreshold = 0.1f;
 
+        std::cout << icpSettings.pose[0].x << " " << icpSettings.pose[0].y << " " << icpSettings.pose[0].z << " " << icpSettings.pose[0].w << std::endl;
+        std::cout << icpSettings.lastFramePose[0].x << " " << icpSettings.lastFramePose[0].y << " " << icpSettings.lastFramePose[0].z << " " << icpSettings.lastFramePose[0].w << std::endl;
+        // std::cout << "vertextMap : ";
+        // printVector(vertexMap);
+        // std::cout << "normalMap : ";
+        // printVector(normalMap);
+        
 
         vulkanWrapper.addCommandPushConstants(icpSettings);
-        vulkanWrapper.submitAndWait(size, size, size);
+        vulkanWrapper.submitAndWait(width, height, 1);
         {
             auto P = BufferAta.map<float>();
-            DumpToFile(P.data, byte_size, "sdf_values", sensor.m_currentIdx);
+            std::cout << "ATA: " << std::endl;
+            std::cout << P[0] << " " << P[1] << " " << P[2] << " " << P[3] << " " << P[4] << " " << P[5] << std::endl;
         }
 
         {
             auto P = BufferAtb.map<float>();
-            DumpToFile(P.data, byte_size, "sdf_weights", sensor.m_currentIdx);
+            std::cout << "ATB: " << std::endl;
+            for (int i = 0; i < groupCount * 6; i++) {
+                std::cout << P[i] << " ";
+            }
+            std::cout << std::endl;
         }
 
         break;
