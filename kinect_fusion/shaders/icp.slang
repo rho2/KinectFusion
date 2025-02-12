@@ -1,22 +1,28 @@
 #version 460
 
 #define GROUPDIMENSION 16
-#define THREADS_PER_GROUP (GROUPDIMENSION * GROUPDIMENSION)
+// #define THREADS_PER_GROUP (GROUPDIMENSION * GROUPDIMENSION)
 
 #include "device_host.h"
 
 // Input buffers for the current and predicted frames
 [[vk::push_constant]] ConstantBuffer<ICPSettings> icpSettings;
 
-StructuredBuffer<float3>  currentVertexMap;   // Input current vertexMap V_(u)
-StructuredBuffer<float3> lastVertexMap;      // Input last vertexMap Vhat
-StructuredBuffer<float3> currentNormalMap;  // Input current normalMap N_(u)
-StructuredBuffer<float3> lastNormalMap;     // Input past normalMap Nhat
-RWStructuredBuffer<float[6][6]> ata;       // Output ata
+StructuredBuffer<float4>  currentVertexMap;   // Input current vertexMap V_(u) (float4 just to fix the stride problem in structuredBuffers)
+StructuredBuffer<float4> lastVertexMap;      // Input last vertexMap Vhat
+StructuredBuffer<float4> currentNormalMap;  // Input current normalMap N_(u)
+StructuredBuffer<float4> lastNormalMap;     // Input past normalMap Nhat
+RWStructuredBuffer<float[6][6]> ata;       // Output ata for each group
 RWStructuredBuffer<float[6]> atb;
 
-groupshared float[6][6] localATA[THREADS_PER_GROUP];
-groupshared float[6] localATB[THREADS_PER_GROUP];
+const mat3 depthIntrinsics = mat3(
+    vec3(525.0f, 0.0f, 319.5f),
+    vec3(0.0f, 525.0f, 239.5f),
+    vec3(0.0f, 0.0f, 1.0f)
+);
+
+groupshared float[6][6] localATA[GROUPDIMENSION];
+groupshared float[6] localATB[GROUPDIMENSION];
 
 float4x4 transformInverse(float4x4 transform) {
     float3x3 rotation = (float3x3)transform; // Extract the 3x3 rotation part
@@ -44,17 +50,24 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
 
     uint initialPixelIndex = threadId.x + threadId.y * icpSettings.width;
 
-    float3 v = currentVertexMap[initialPixelIndex];
-    float3 n = currentNormalMap[initialPixelIndex];
+    float3 v = currentVertexMap[initialPixelIndex].xyz;
+    float3 n = currentNormalMap[initialPixelIndex].xyz;
+
+    if (v.z < -1000 || n.z < -1000 || isnan(v.z) || isnan(n.z)) {
+        return;
+    }
     // VertexNormal u_hat = predictedFrame[index];
     // compute v_hat calculate t_(k-1,k). bring in to camera image space. apply perspective. we now have u_hat. check the value of u_hat from the past vertex map
     float4x4 lastFrameToCurrentFrame = mul(transformInverse(icpSettings.lastFramePose), icpSettings.pose);
     float3 currentVertexInLasFrame = mul(lastFrameToCurrentFrame, float4(v, 1.0)).xyz;
     float3 homogenousCoord = float3(currentVertexInLasFrame.x / currentVertexInLasFrame.z, currentVertexInLasFrame.y / currentVertexInLasFrame.z, 1.0);
-    float3 pixelPos = float3(mul(icpSettings.cameraProjection, homogenousCoord).xy, 0);
+    float3 pixelPos = float3(mul(depthIntrinsics, homogenousCoord).xy, 0);
     uint lastPixelIndex = (uint)pixelPos.x + (uint)pixelPos.y * icpSettings.width;
-    float3 v_hat = lastVertexMap[lastPixelIndex];
-    float3 n_hat = lastNormalMap[lastPixelIndex];
+    float3 v_hat = lastVertexMap[lastPixelIndex].xyz;
+    float3 n_hat = lastNormalMap[lastPixelIndex].xyz;
+    if (v_hat.z < -1000 || n_hat.z < -1000) {
+        return;
+    }
 
     float3 transformedNormal = mul(icpSettings.lastFramePose , float4(n,0)).xyz;
 

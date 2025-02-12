@@ -9,26 +9,29 @@
 #include <cstdio>
 #include <iomanip>
 
-namespace DH {
+namespace DH
+{
     using namespace glm;
-#include "shaders/device_host.h"  // Shared between host and device
-}  // namespace DH
+#include "shaders/device_host.h" // Shared between host and device
+} // namespace DH
 
 #include "_autogen/icp_slang.h"
-const auto& icp_shd = std::vector<uint32_t>{std::begin(icpSlang), std::end(icpSlang)};
+const auto &icp_shd = std::vector<uint32_t>{std::begin(icpSlang), std::end(icpSlang)};
 
-void DumpToFile(const void* Data, const uint32_t size, const std::string& prefix, const uint32_t index) {
+void DumpToFile(const void *Data, const uint32_t size, const std::string &prefix, const uint32_t index)
+{
     std::ostringstream filename;
     filename << prefix << "_" << std::setw(4) << std::setfill('0') << index << ".bin";
 
     std::ofstream file(filename.str(), std::ios::binary);
-    file.write(reinterpret_cast<const char*>(Data), size);
+    file.write(reinterpret_cast<const char *>(Data), size);
     file.close();
 
     std::cout << "Wrote: " << filename.str() << std::endl;
 }
 
-void FillVertexNormalMap(std::vector<Vector4f>& targetMap, std::vector<Vector4f>& targetNormalMap, const Matrix4f& depthExtrinsics, const Matrix3f& depthIntrinsics, const float* depthMap, const int width, const int height) {
+void FillVertexNormalMap(std::vector<Vector4f> &targetMap, std::vector<Vector4f> &targetNormalMap, const Matrix4f &depthExtrinsics, const Matrix3f &depthIntrinsics, const float *depthMap, const int width, const int height)
+{
     const float maxDistance = 1000;
     float fovX = depthIntrinsics(0, 0);
     float fovY = depthIntrinsics(1, 1);
@@ -41,63 +44,74 @@ void FillVertexNormalMap(std::vector<Vector4f>& targetMap, std::vector<Vector4f>
     Matrix3f rotationInv = depthExtrinsicsInv.block(0, 0, 3, 3);
     Vector3f translationInv = depthExtrinsicsInv.block(0, 3, 3, 1);
 
-
     // For every pixel row.
 #pragma omp parallel for
-    for (int v = 0; v < height; ++v) {
+    for (int v = 0; v < height; ++v)
+    {
         // For every pixel in a row.
-        for (int u = 0; u < width; ++u) {
+        for (int u = 0; u < width; ++u)
+        {
             unsigned int idx = v * width + u; // linearized index
             float depth = depthMap[idx];
-            if (depth == MINF) {
+            if (depth == MINF)
+            {
                 targetMap[idx] = Vector4f(MINF, MINF, MINF, MINF);
             }
-            else {
+            else
+            {
                 // Back-projection to camera space.
                 targetMap[idx] = (rotationInv * Vector3f((u - cX) / fovX * depth, (v - cY) / fovY * depth, depth) + translationInv).homogeneous();
             }
         }
     }
 
-    #pragma omp parallel for
-        for (int v = 1; v < height - 1; ++v) {
-            for (int u = 1; u < width - 1; ++u) {
-                unsigned int idx = v * width + u; // linearized index
+#pragma omp parallel for
+    for (int v = 1; v < height - 1; ++v)
+    {
+        for (int u = 1; u < width - 1; ++u)
+        {
+            unsigned int idx = v * width + u; // linearized index
 
-                const float du = 0.5f * (depthMap[idx + 1] - depthMap[idx - 1]);
-                const float dv = 0.5f * (depthMap[idx + width] - depthMap[idx - width]);
-                if (!std::isfinite(du) || !std::isfinite(dv) || abs(du) > maxDistanceHalved || abs(dv) > maxDistanceHalved) {
-                    targetNormalMap[idx] = Vector4f(MINF, MINF, MINF, MINF);
-                    continue;
-                }
-
-                Vector3f normal {(targetMap[idx + 1].head<3>() - targetMap[idx - 1].head<3>()).cross(targetMap[idx + width].head<3>() - targetMap[idx - width].head<3>())};
-                normal.normalize();
-                targetNormalMap[idx] = Vector4f(normal.x(), normal.y(), normal.z(), 0.f);
+            const float du = 0.5f * (depthMap[idx + 1] - depthMap[idx - 1]);
+            const float dv = 0.5f * (depthMap[idx + width] - depthMap[idx - width]);
+            if (!std::isfinite(du) || !std::isfinite(dv) || abs(du) > maxDistanceHalved || abs(dv) > maxDistanceHalved)
+            {
+                targetNormalMap[idx] = Vector4f(MINF, MINF, MINF, MINF);
+                continue;
             }
-        }
 
-        // We set invalid normals for border regions.
-        for (int u = 0; u < width; ++u) {
-            targetNormalMap[u] = Vector4f(MINF, MINF, MINF, MINF);
-            targetNormalMap[u + (height - 1) * width] = Vector4f(MINF, MINF, MINF, MINF);
+            Vector3f normal{(targetMap[idx + 1].head<3>() - targetMap[idx - 1].head<3>()).cross(targetMap[idx + width].head<3>() - targetMap[idx - width].head<3>())};
+            normal.normalize();
+            targetNormalMap[idx] = Vector4f(normal.x(), normal.y(), normal.z(), 0.f);
         }
-        for (int v = 0; v < height; ++v) {
-            targetNormalMap[v * width] = Vector4f(MINF, MINF, MINF, MINF);
-            targetNormalMap[(width - 1) + v * width] = Vector4f(MINF, MINF, MINF, MINF);
-        }
+    }
 
+    // We set invalid normals for border regions.
+    for (int u = 0; u < width; ++u)
+    {
+        targetNormalMap[u] = Vector4f(MINF, MINF, MINF, MINF);
+        targetNormalMap[u + (height - 1) * width] = Vector4f(MINF, MINF, MINF, MINF);
+    }
+    for (int v = 0; v < height; ++v)
+    {
+        targetNormalMap[v * width] = Vector4f(MINF, MINF, MINF, MINF);
+        targetNormalMap[(width - 1) + v * width] = Vector4f(MINF, MINF, MINF, MINF);
+    }
 }
 
-void printVector(std::vector<Vector4f> vec) {
-    for (int i = 0; i < vec.size(); i++) {
+void printVector(std::vector<Vector4f> vec)
+{
+    for (int i = 0; i < vec.size(); i++)
+    {
         std::cout << vec[i].x() << " " << vec[i].y() << " " << vec[i].z() << " " << vec[i].w() << std::endl;
     }
 }
 
-int main() {
+int main()
+{
     VirtualSensor sensor;
-    if (!sensor.Init("../../../Data/rgbd_dataset_freiburg1_xyz/")) {
+    if (!sensor.Init("../../../Data/rgbd_dataset_freiburg1_xyz/"))
+    {
         std::cout << "Failed to initialize the sensor!\nCheck file path!" << std::endl;
         exit(1);
     }
@@ -110,14 +124,13 @@ int main() {
 
     VulkanWrapper vulkanWrapper{"ICP"};
 
-
     const size_t mapSize = width * height * 4 * sizeof(float);
-    auto& BufferCurrentVertexMap = vulkanWrapper.addBuffer(mapSize);
-    auto& BuffferLastVertexMap = vulkanWrapper.addBuffer(mapSize);
-    auto& BufferNormalMap = vulkanWrapper.addBuffer(mapSize);
-    auto& BufferLastNormalMap = vulkanWrapper.addBuffer(mapSize);
-    auto& BufferAta = vulkanWrapper.addBuffer(groupCount * 6 * 6 * sizeof(float));
-    auto& BufferAtb = vulkanWrapper.addBuffer(groupCount * 6 * sizeof(float));
+    auto &BufferCurrentVertexMap = vulkanWrapper.addBuffer(mapSize);
+    auto &BuffferLastVertexMap = vulkanWrapper.addBuffer(mapSize);
+    auto &BufferNormalMap = vulkanWrapper.addBuffer(mapSize);
+    auto &BufferLastNormalMap = vulkanWrapper.addBuffer(mapSize);
+    auto &BufferAta = vulkanWrapper.addBuffer(groupCount * 6 * 6 * sizeof(float));
+    auto &BufferAtb = vulkanWrapper.addBuffer(groupCount * 6 * sizeof(float));
 
     vulkanWrapper.createPipeline(sizeof(DH::ICPSettings), icp_shd, "ICPCalcMain");
 
@@ -127,8 +140,9 @@ int main() {
     DH::ICPSettings icpSettings{};
     // perlinSettings.size = size;
     sensor.ProcessNextFrame();
-    Matrix4f lastFrame {sensor.GetTrajectory()};
-    for (int i = 0 ; i < 4 ; i ++) {
+    Matrix4f lastFrame{sensor.GetTrajectory()};
+    for (int i = 0; i < 4; i++)
+    {
         icpSettings.lastFramePose[i].x = sensor.GetTrajectory().row(i).x();
         icpSettings.lastFramePose[i].y = sensor.GetTrajectory().row(i).y();
         icpSettings.lastFramePose[i].z = sensor.GetTrajectory().row(i).z();
@@ -137,20 +151,26 @@ int main() {
 
     {
         auto P = BufferAta.map<float>();
-        for (auto i = 0; i < groupCount * 6 * 6; ++i) { P[i] = 0.0f; }
+        for (auto i = 0; i < groupCount * 6 * 6; ++i)
+        {
+            P[i] = 0.0f;
+        }
     }
 
     {
         auto P = BufferAtb.map<float>();
-        for (auto i = 0; i < groupCount * 6; ++i) { P[i] = 0.0f; }
+        for (auto i = 0; i < groupCount * 6; ++i)
+        {
+            P[i] = 0.0f;
+        }
     }
-
 
     std::vector<Vector4f> initialVertexMap(width * height);
     std::vector<Vector4f> initialNormalMap(width * height);
     FillVertexNormalMap(initialVertexMap, initialNormalMap, sensor.GetDepthExtrinsics(), sensor.GetDepthIntrinsics(), sensor.GetDepth(), width, height);
 
-    while (sensor.ProcessNextFrame()) {
+    while (sensor.ProcessNextFrame())
+    {
 
         std::vector<Vector4f> vertexMap(width * height);
         std::vector<Vector4f> normalMap(width * height);
@@ -159,57 +179,94 @@ int main() {
         BuffferLastVertexMap.fillWith(initialVertexMap.data());
         BufferNormalMap.fillWith(normalMap.data());
         BufferLastNormalMap.fillWith(initialNormalMap.data());
-
-        auto& CmdBuffer = vulkanWrapper.startCommandBuffer();
-
-        // if (sensor.m_increment == 0) {
-        //     CmdBuffer.fillBuffer(*BufferCurrentVertexMap._buffer, 0, byte_size, 0);
-        //     CmdBuffer.fillBuffer(*BuffferLastVertexMap._buffer, 0, byte_size, 0);
-        // }
-
+        const int icp_turns = 10;
         Matrix4f foo = lastFrame;
-        for (int i = 0; i < 4; ++i) {
-            icpSettings.pose[i].x = lastFrame.row(i).x();
-            icpSettings.pose[i].y = lastFrame.row(i).y();
-            icpSettings.pose[i].z = lastFrame.row(i).z();
-            icpSettings.pose[i].w = lastFrame.row(i).w();
-        }
-        Matrix3f intrinsics = sensor.GetDepthIntrinsics();
-        // for (int i = 0; i < 3; ++i) {
-        //     icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
-        //     icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
-        //     icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
-        // }
-        icpSettings.width = 640;
-        icpSettings.distanceThreshold = 0.1f;
-        icpSettings.angleThreshold = 0.1f;
-
-        std::cout << icpSettings.pose[0].x << " " << icpSettings.pose[0].y << " " << icpSettings.pose[0].z << " " << icpSettings.pose[0].w << std::endl;
-        std::cout << icpSettings.lastFramePose[0].x << " " << icpSettings.lastFramePose[0].y << " " << icpSettings.lastFramePose[0].z << " " << icpSettings.lastFramePose[0].w << std::endl;
-        // std::cout << "vertextMap : ";
-        // printVector(vertexMap);
-        // std::cout << "normalMap : ";
-        // printVector(normalMap);
-        
-
-        vulkanWrapper.addCommandPushConstants(icpSettings);
-        vulkanWrapper.submitAndWait(width, height, 1);
+        for (int i = 0; i < 4; ++i)
         {
-            auto P = BufferAta.map<float>();
-            std::cout << "ATA: " << std::endl;
-            std::cout << P[0] << " " << P[1] << " " << P[2] << " " << P[3] << " " << P[4] << " " << P[5] << std::endl;
+            icpSettings.pose[i].x = foo.row(i).x();
+            icpSettings.pose[i].y = foo.row(i).y();
+            icpSettings.pose[i].z = foo.row(i).z();
+            icpSettings.pose[i].w = foo.row(i).w();
         }
 
+        for (int turn = 0; turn < 10; turn++)
         {
-            auto P = BufferAtb.map<float>();
-            std::cout << "ATB: " << std::endl;
-            for (int i = 0; i < groupCount * 6; i++) {
-                std::cout << P[i] << " ";
+
+            auto &CmdBuffer = vulkanWrapper.startCommandBuffer();
+
+            // if (sensor.m_increment == 0) {
+            //     CmdBuffer.fillBuffer(*BufferCurrentVertexMap._buffer, 0, byte_size, 0);
+            //     CmdBuffer.fillBuffer(*BuffferLastVertexMap._buffer, 0, byte_size, 0);
+            // }
+
+            Matrix3f intrinsics = sensor.GetDepthIntrinsics();
+            // for (int i = 0; i < 3; ++i) {
+            //     icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
+            //     icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
+            //     icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
+            // }
+            icpSettings.width = 640;
+            icpSettings.distanceThreshold = 0.1f;
+            icpSettings.angleThreshold = 0.1f;
+
+            // std::cout << "vertextMap : ";
+            // printVector(vertexMap);
+            // std::cout << "normalMap : ";
+            // printVector(normalMap);
+
+            vulkanWrapper.addCommandPushConstants(icpSettings);
+            vulkanWrapper.submitAndWait(width, height, 1);
+            Eigen::Matrix<float, 6, 6> ATA;
+            {
+                auto P = BufferAta.map<float>();
+                for (int i = 0; i < groupCount * 6 * 6; i++)
+                {
+                    ATA((i % 36) / 6, (i % 36) % 6) += P[i];
+                }
+                // std::cout << "ATA: " << std::endl;
+                // std::cout << P[0] << " " << P[1] << " " << P[2] << " " << P[3] << " " << P[4] << " " << P[5] << std::endl;
             }
-            std::cout << std::endl;
+            // std::cout << ATA << std::endl;
+
+            Eigen::Vector<float, 6> ATB;
+            {
+                auto P = BufferAtb.map<float>();
+                for (int i = 0; i < groupCount * 6; i++)
+                {
+                    ATB(i % 6) += P[i];
+                }
+            }
+            // std::cout << ATB << std::endl;
+
+            JacobiSVD<MatrixXf> svd(ATA, ComputeThinU | ComputeThinV);
+            VectorXf x = svd.solve(ATB);
+            std::cout << x << std::endl;
+
+            float alpha = x(0), beta = x(1), gamma = x(2);
+
+            // Build the pose matrix
+            Matrix3f rotation = AngleAxisf(alpha, Vector3f::UnitX()).toRotationMatrix() *
+                                AngleAxisf(beta, Vector3f::UnitY()).toRotationMatrix() *
+                                AngleAxisf(gamma, Vector3f::UnitZ()).toRotationMatrix();
+
+            Vector3f translation = x.tail(3);
+
+            // Build the pose matrix using the rotation and translation matrices
+            Matrix4f estimatedPose2 = Matrix4f::Identity();
+            estimatedPose2.block(0, 0, 3, 3) = rotation;
+            estimatedPose2.block(0, 3, 3, 1) = translation;
+
+            foo = estimatedPose2 * foo;
+            for (int i = 0; i < 4; ++i)
+            {
+                icpSettings.pose[i].x = foo.row(i).x();
+                icpSettings.pose[i].y = foo.row(i).y();
+                icpSettings.pose[i].z = foo.row(i).z();
+                icpSettings.pose[i].w = foo.row(i).w();
+            }
+            std::cout << foo << std::endl;
         }
 
         break;
     }
 }
-
