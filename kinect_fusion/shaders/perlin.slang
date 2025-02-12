@@ -24,12 +24,12 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 
     uint index = threadIdx.z * perlinSettings.size * perlinSettings.size + threadIdx.y * perlinSettings.size + threadIdx.x;
 
-    float scale = 100.0;
+    float scale = perlinSettings.size/2.0;
     int offset = perlinSettings.size/2;
 
     float4 coord;
-    coord.x = (threadIdx.x) / scale;
-    coord.y = (threadIdx.z - offset) / scale;
+    coord.x =  -1.0f * (threadIdx.x - offset) / scale;
+    coord.y = (threadIdx.z) / scale;
     coord.z = (threadIdx.y) / scale;
     coord.w = 1.0;
 
@@ -54,19 +54,15 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
         return;
 
     float sdf = d - camera_coord.z;
-    float trunc_distance = 0.1f;
 
-    if (sdf < -trunc_distance)
-        return;
+    if (sdf > -TRUNC_DISTANCE) {
+        float old_weight = voxel_grid_weights[index];
+        float new_weight = old_weight + 1;
 
-    sdf = min(1.0, abs(sdf) / trunc_distance) * copysign(1.0f, sdf);
+        float old_value = voxel_grid[index];
+        float new_value = (old_value * old_weight + sdf) / new_weight;
 
-    float old_weight = voxel_grid_weights[index];
-    float new_weight = old_weight + 1;
-
-    float old_value = voxel_grid[index];
-    float new_value = (old_value * old_weight + sdf) / new_weight;
-
-    voxel_grid[index] = new_value;
-    voxel_grid_weights[index] = new_weight;
+        voxel_grid[index] = clamp(new_value, -TRUNC_DISTANCE, TRUNC_DISTANCE);
+        voxel_grid_weights[index] = new_weight;
+    }
 }

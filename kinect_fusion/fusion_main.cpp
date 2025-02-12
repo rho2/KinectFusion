@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    const size_t size = 256;
+    const size_t size = 128;
     const size_t byte_size = size * size * size * sizeof(float);
 
     VulkanWrapper vulkanWrapper{"VolumetricFusion"};
@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
 
     {
         auto P = BufferVoxelGrid.map<float>();
-        for (auto i = 0; i < size * size * size; ++i) { P[i] = 0.1f; }
+        for (auto i = 0; i < size * size * size; ++i) { P[i] = TRUNC_DISTANCE + 1; }
     }
 
     {

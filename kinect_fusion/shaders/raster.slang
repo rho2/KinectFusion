@@ -49,8 +49,7 @@ struct PSout
 
 [[vk::push_constant]] ConstantBuffer<PushConstant> pushConst;
 [[vk::binding(0, 0)]] ConstantBuffer<FrameInfo> frameInfo;
-[[vk::binding(1)]] Sampler3D g_Volume;
-
+[[vk::binding(1)]] StructuredBuffer<float> voxel_grid;
 
 // Ray structure
 struct Ray
@@ -96,26 +95,30 @@ bool intersectCube(in Ray ray, in Bbox bbox, out float3 p1, out float3 p2)
   return true;
 }
 
-// Computes the gradient of a 3D volume at a given position by sampling neighboring voxels and estimating
-// the rate of change in each direction using finite differences. The resulting gradient vector represents
-// the direction (normal) and magnitude of the steepest ascent/descent in the volume at that position.
-float3 computeVolumeGradient(Sampler3D volume, float3 p, float voxelSize)
+float getValueAt(float3 p) {
+    int3 scaled = clamp(int3(p * (pushConst.size - 1)), 0, pushConst.size - 1);
+    uint index = scaled.z * pushConst.size * pushConst.size  + scaled.y * pushConst.size  + scaled.x;
+    return voxel_grid[index];
+}
+
+float3 computeVolumeGradient(float3 p, float voxelSize)
 {
   float inc = voxelSize * 0.5F;
-  float dx = (volume.Sample(p - float3(inc, 0, 0)).r - volume.Sample(p + float3(inc, 0, 0)).r) / voxelSize;
-  float dy = (volume.Sample(p - float3(0, inc, 0)).r - volume.Sample(p + float3(0, inc, 0)).r) / voxelSize;
-  float dz = (volume.Sample(p - float3(0, 0, inc)).r - volume.Sample(p + float3(0, 0, inc)).r) / voxelSize;
+  float dx = (getValueAt(p - float3(inc, 0, 0)) - getValueAt(p + float3(inc, 0, 0))) / voxelSize;
+  float dy = (getValueAt(p - float3(0, inc, 0)) - getValueAt(p + float3(0, inc, 0))) / voxelSize;
+  float dz = (getValueAt(p - float3(0, 0, inc)) - getValueAt(p + float3(0, 0, inc))) / voxelSize;
 
   return normalize(float3(dx, dy, dz));
 }
 
-bool rayMarching(const Sampler3D volume, const float3 p1, const float3 p2, const int numSteps, const float threshold, out float3 hitPoint)
+bool rayMarching(const float3 p1, const float3 p2, const int numSteps, const float threshold, out float3 hitPoint)
 {
   const float3 stepSize = (p2 - p1) / float(numSteps);
   hitPoint = p1;
 
   for (int i = 0; i < numSteps; ++i) {
-    float value = volume.Sample(hitPoint).r;
+    float value = getValueAt(hitPoint);
+
     if (value < 0) {
       return true;
     }
@@ -168,19 +171,18 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
 
   // Ray-marching
   float3 hitPoint;
-  hit = rayMarching(g_Volume, p1, p2, pushConst.steps, pushConst.threshold, hitPoint);
+  hit = rayMarching(p1, p2, pushConst.steps, pushConst.threshold, hitPoint);
   if (!hit)
     discard;
 
-  // Find normal at position
-  uint3 dim;
-  uint levels;
-  g_Volume.GetDimensions(0, dim.x, dim.y, dim.z, levels);
-  float3 normal = computeVolumeGradient(g_Volume, hitPoint, 1.0 / dim.x);
-  if (dot(ray.direction, normal) > 0)  // Make nornal pointing toward origin
+  float3 normal = computeVolumeGradient(hitPoint, 1.0 / pushConst.size);
+  if (dot(ray.direction, normal) > 0)
     normal *= -1;
 
   if (pushConst.render_normals) {
+    normal.x *= -1;
+    normal.z *= -1;
+
     output.color.xyz = normal.xyz;
   } else {
     float3 lightDir = (frameInfo.headlight == 1) ? -ray.direction : normalize(frameInfo.toLight);
