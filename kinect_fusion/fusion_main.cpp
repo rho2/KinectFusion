@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    const size_t size = 128;
+    const size_t size = 256;
     const size_t byte_size = size * size * size * sizeof(float);
 
     VulkanWrapper vulkanWrapper{"VolumetricFusion"};
