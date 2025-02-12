@@ -21,6 +21,10 @@
 #define VMA_IMPLEMENTATION
 #define IMGUI_DEFINE_MATH_OPERATORS
 
+#if defined(_WIN32)
+#include "windows.h"
+#endif
+
 #include "VirtualSensor.h"
 
 #include "backends/imgui_impl_vulkan.h"

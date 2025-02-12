@@ -8,10 +8,10 @@
 // Input buffers for the current and predicted frames
 [[vk::push_constant]] ConstantBuffer<ICPSettings> icpSettings;
 
-Texture2D<float3>  currentVertexMap;   // Input current vertexMap V_(u)
-Texture2D<float3> lastVertexMap;      // Input last vertexMap Vhat
-Texture2D<float3> currentNormalMap;  // Input current normalMap N_(u)
-Texture2D<float3> lastNormalMap;     // Input past normalMap Nhat
+StructuredBuffer<float3>  currentVertexMap;   // Input current vertexMap V_(u)
+StructuredBuffer<float3> lastVertexMap;      // Input last vertexMap Vhat
+StructuredBuffer<float3> currentNormalMap;  // Input current normalMap N_(u)
+StructuredBuffer<float3> lastNormalMap;     // Input past normalMap Nhat
 RWStructuredBuffer<float[6][6]> ata;       // Output ata
 RWStructuredBuffer<float[6]> atb;
 
@@ -42,16 +42,19 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     uint index = threadId.x + threadId.y * icpSettings.width;
     uint2 pixelCoord = threadId.xy;
 
-    float3 v = currentVertexMap.Load(int3(pixelCoord, 0));
-    float3 n = currentNormalMap.Load(int3(pixelCoord, 0));
+    uint initialPixelIndex = threadId.x + threadId.y * icpSettings.width;
+
+    float3 v = currentVertexMap[initialPixelIndex];
+    float3 n = currentNormalMap[initialPixelIndex];
     // VertexNormal u_hat = predictedFrame[index];
     // compute v_hat calculate t_(k-1,k). bring in to camera image space. apply perspective. we now have u_hat. check the value of u_hat from the past vertex map
     float4x4 lastFrameToCurrentFrame = mul(transformInverse(icpSettings.lastFramePose), icpSettings.pose);
     float3 currentVertexInLasFrame = mul(lastFrameToCurrentFrame, float4(v, 1.0)).xyz;
     float3 homogenousCoord = float3(currentVertexInLasFrame.x / currentVertexInLasFrame.z, currentVertexInLasFrame.y / currentVertexInLasFrame.z, 1.0);
     float3 pixelPos = float3(mul(icpSettings.cameraProjection, homogenousCoord).xy, 0);
-    float3 v_hat = lastVertexMap.Load((int3)floor(pixelPos));
-    float3 n_hat = lastNormalMap.Load((int3)floor(pixelPos));
+    uint lastPixelIndex = (uint)pixelPos.x + (uint)pixelPos.y * icpSettings.width;
+    float3 v_hat = lastVertexMap[lastPixelIndex];
+    float3 n_hat = lastNormalMap[lastPixelIndex];
 
     float3 transformedNormal = mul(icpSettings.lastFramePose , float4(n,0)).xyz;
 
