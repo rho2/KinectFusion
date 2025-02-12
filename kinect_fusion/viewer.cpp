@@ -59,7 +59,7 @@ class Texture3dSample : public nvvkhl::IAppElement
 {
   struct Settings
   {
-    uint32_t             powerOfTwoSize = 8;
+    uint32_t             voxelSize;
     bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
@@ -68,7 +68,7 @@ class Texture3dSample : public nvvkhl::IAppElement
     glm::vec3            toLight        = {1.F, 1.F, 1.F};
     int                  steps          = 1000;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
-    uint32_t             getSize() { return 1 << powerOfTwoSize; }
+    uint32_t             getSize() { return voxelSize; }
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
   };
 
@@ -94,8 +94,7 @@ public:
     m_dsetRaster  = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
-    voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), 1.0f);
+    fillPerlinImage();
 
     createVkBuffers();
     createTextureBuffers();
@@ -286,8 +285,6 @@ private:
   void fillPerlinImage()
   {
     nvh::ScopedTimer st(__FUNCTION__);
-    uint32_t realSize = m_settings.getSize();
-    voxel_grid.reserve(realSize);
 
     std::ostringstream filename;
     filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << 0 << ".bin";
@@ -299,8 +296,15 @@ private:
       return;
     }
 
-    file.read(reinterpret_cast<char*>(voxel_grid.data()), voxel_grid.size() * sizeof(float));
-    std::cout << "Read file: " << filename.str() << "\n";
+    file.read(reinterpret_cast<char*>(&m_settings.voxelSize), sizeof(uint32_t));
+
+
+    uint32_t realSize = m_settings.getSize();
+    uint32_t totalSize = realSize * realSize * realSize;
+
+    voxel_grid.resize(totalSize);
+    file.read(reinterpret_cast<char*>(voxel_grid.data()), totalSize * sizeof(float));
+    std::cout << "Read file: " << filename.str() << " Size: " << m_settings.voxelSize << "\n";
   }
 
   void setData(VkCommandBuffer cmd)
@@ -310,7 +314,7 @@ private:
 
     uint32_t realSize = m_settings.getSize();
 
-    fillPerlinImage();
+    // fillPerlinImage();
 
     const VkOffset3D               offset{0};
     const VkImageSubresourceLayers subresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
