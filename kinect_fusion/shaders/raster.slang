@@ -49,7 +49,7 @@ struct PSout
 
 [[vk::push_constant]] ConstantBuffer<PushConstant> pushConst;
 [[vk::binding(0, 0)]] ConstantBuffer<FrameInfo> frameInfo;
-[[vk::binding(1)]] StructuredBuffer<float> voxel_grid;
+[[vk::binding(1, 0)]] StructuredBuffer<float> voxel_grid;
 
 // Ray structure
 struct Ray

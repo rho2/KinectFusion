@@ -16,7 +16,7 @@ const mat3 depthIntrinsics = mat3(
 );
 
 [shader("compute")]
-[numthreads(32, 4,  1)]
+[numthreads(256, 1, 1)]
 void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 {
     if (threadIdx.x >= perlinSettings.size || threadIdx.y >= perlinSettings.size || threadIdx.z >= perlinSettings.size)
@@ -48,6 +48,8 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
     float sdf = d - float(camera_coord.z);
 
     if (sdf > -TRUNC_DISTANCE) {
+        sdf = min(abs(sdf / TRUNC_DISTANCE), 1) * sign(sdf);
+
         float old_weight = voxel_grid_weights[index];
         float new_weight = old_weight + 1;
 
