@@ -16,7 +16,7 @@ const mat3 depthIntrinsics = mat3(
 );
 
 [shader("compute")]
-[numthreads(32, 4,  1)]
+[numthreads(256, 1, 1)]
 void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 {
     if (threadIdx.x >= perlinSettings.size || threadIdx.y >= perlinSettings.size || threadIdx.z >= perlinSettings.size)

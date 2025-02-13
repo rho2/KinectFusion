@@ -143,7 +143,7 @@ void run_gpu(VirtualSensor &sensor, const Setting& settings) {
         perlinSettings.transform[0] *= -1;
 
         vulkanWrapper.addCommandPushConstants(perlinSettings);
-        vulkanWrapper.submitAndWait(size, size, size);
+        vulkanWrapper.submitAndWait((size + 256 -1)/256, size, size);
 
         sum += watch.end();
         count++;

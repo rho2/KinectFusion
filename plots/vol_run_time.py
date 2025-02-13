@@ -4,6 +4,9 @@ from random import shuffle
 import json
 
 def run_single(cmd: Path, n: int, runtime: str) -> float:
+    if runtime == "cpu" and n > 300:
+        return 1000.0
+
     cmd = [cmd, "--size", str(n)]
     if runtime == "cpu":
         cmd.append("--cpu")
@@ -24,9 +27,10 @@ def main():
     exe = Path().cwd() / "bin_x64" / "Release" / "vk_mini_fusion_exe_app"
 
     all_cmds = [
-        (n, c) for n  in range(50, 401, 50) for _ in range(1) for c in ("cpu", "gpu", "cuda")
+        # (n, c) for n  in range(790, 810, 1) for _ in range(1) for c in ("cuda", "shader", "cpu")
+        (n, c) for n  in range(25, 951, 25) for _ in range(1) for c in ("cuda", "shader", "cpu")
     ]
-    shuffle(all_cmds)
+    # shuffle(all_cmds)
 
     results = {}
 

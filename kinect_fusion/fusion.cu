@@ -64,15 +64,16 @@ bool hack_ProcessNextFrame(VirtualSensor *sensor);
 glm::mat4 hack_GetTransform(VirtualSensor *sensor);
 float* hack_GetDepth(VirtualSensor *sensor);
 
-void checkCudaError(cudaError_t err) {
+void checkCudaError(cudaError_t err, int line) {
     if (err != cudaSuccess) {
         // Get the error string
         const char* errorString = cudaGetErrorString(err);
 
         // Throw a runtime_error with the error string
-        throw std::runtime_error("CUDA error: " + std::string(errorString));
+        throw std::runtime_error("CUDA error: " + std::string(errorString) + ", line: " + std::to_string(line));
     }
 }
+#define CHECK(call) checkCudaError(call, __LINE__)
 
 __host__ void run_cuda(VirtualSensor *sensor, const Setting& settings)
 {
@@ -106,7 +107,7 @@ __host__ void run_cuda(VirtualSensor *sensor, const Setting& settings)
     params.depth_map_0.data = BufferDepthMap;
     params.perlinSettings_0 = BufferSettings;
 
-    checkCudaError(cudaMemcpyToSymbol(SLANG_globalParams, &params, sizeof(GlobalParams_0)));
+    CHECK(cudaMemcpyToSymbol(SLANG_globalParams, &params, sizeof(GlobalParams_0)));
 
     PerlinSettings_natural_0 settings_cpu{};
     settings_cpu.inv_scale_0 = 2.0f / float(size);
@@ -114,7 +115,7 @@ __host__ void run_cuda(VirtualSensor *sensor, const Setting& settings)
     settings_cpu.size2_0 = size * size;
     settings_cpu.size3_0 = size * size * size;
 
-    dim3 blockSize(8, 8, 8);
+    dim3 blockSize(128, 1, 1);
     dim3 gridSize((size + blockSize.x - 1) / blockSize.x,
                   (size + blockSize.y - 1) / blockSize.y,
                   (size + blockSize.z - 1) / blockSize.z);
@@ -137,7 +138,7 @@ __host__ void run_cuda(VirtualSensor *sensor, const Setting& settings)
 
         computeMain<<<gridSize, blockSize>>>();
 
-        checkCudaError(cudaGetLastError());
+        CHECK(cudaGetLastError());
         cudaDeviceSynchronize();
 
         sum += watch.end();

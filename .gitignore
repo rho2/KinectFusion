@@ -18,3 +18,5 @@ build/
 log_*.txt
 cmake-build-*/
 .idea/
+venv/
+*.bin

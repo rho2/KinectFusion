@@ -31,3 +31,19 @@ This binary will run the volumetric integration on the provided dataset and writ
 ```
 
 Will open the sdf_values_0000.bin file and raytrace it to show the rendering code.
+
+## Benchmarks
+Install the python requirements:
+```
+python -m pip install pandas seaborn PyQt6
+```
+
+After building a release build, the benchmark script can be executed. This will create a file called "vol_run_times.json" containing the results.
+```
+python plots/vol_run_time.py
+```
+
+To plot the results call the plotting script:
+```
+python plots/plot_vol.py
+```
