@@ -77,6 +77,10 @@
    Texture3dSample()           = default;
    ~Texture3dSample() override = default;
  
+   glm::vec4 ConvertColorToVec4(const BYTE* color) {
+    return glm::vec4(color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f, color[3] / 255.0f);
+  }
+
    // Implementation of nvvk::IApplication interface
    void onAttach(nvvkhl::Application* app) override
    {
@@ -282,6 +286,12 @@
       m_depth_texture = m_alloc->createBuffer(depthMapSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
       m_dutil->DBG_NAME(m_depth_texture.buffer);
+
+      // Create buffer for colors
+      VkDeviceSize colorsSize = sizeof(glm::vec4) * m_settings.getTotalSize();
+      m_texture_colors = m_alloc->createBuffer(colorsSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+      m_dutil->DBG_NAME(m_texture_colors.buffer);
    }
  
    void createTexture()
@@ -408,7 +418,9 @@
     auto& d = m_dsetCompute;
     d->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // voxel_grid
     d->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // voxel_grid_weights
-    d->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // depth_map
+    d->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // color grid
+    d->addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // depth map
+    d->addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT); // color map
     d->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
   
     m_dutil->DBG_NAME(d->getLayout());
@@ -429,7 +441,9 @@
   
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 0, m_descBufInfoGrid.get()));
     m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 1, m_descBufInfoWeights.get()));
-    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, m_descBufInfoDepth.get()));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 2, m_descBufInfoGridColors.get()));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 3, m_descBufInfoDepth.get()));
+    m_dsetCompWrites.emplace_back(m_dsetCompute->makeWrite(0, 4, m_descBufInfoColor.get()));
 
     vkCreateComputePipelines(m_device, {}, 1, &comp_info, nullptr, &m_computePipeline);
     m_dutil->DBG_NAME(m_computePipeline);
@@ -438,70 +452,76 @@
     vkDestroyShaderModule(m_device, comp_info.stage.module, nullptr);
    }
  
-   void runCompute(VkCommandBuffer cmd, const VkExtent3D& size)
-   {
+   void runCompute(VkCommandBuffer cmd, const VkExtent3D& size) {
+    if (sensor.m_currentIdx < 0) return;
 
-     if (sensor.m_currentIdx < 0) return;
-
-     //const size_t size = m_settings.getSize();
-     DH::PerlinSettings perlin   = m_settings.perlin;
-     perlin.size = m_settings.getSize();
-     perlin.size2 = perlin.size * perlin.size;
-     perlin.size3 = perlin.size2 * perlin.size;
-     perlin.inv_scale = 2.0f / perlin.size;
+    DH::PerlinSettings perlin = m_settings.perlin;
+    perlin.size = m_settings.getSize();
+    perlin.size2 = perlin.size * perlin.size;
+    perlin.size3 = perlin.size2 * perlin.size;
+    perlin.inv_scale = 2.0f / perlin.size;
 
     Matrix4f transform = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
     for (int i = 0; i < 4; ++i)
-      for (int j = 0; j < 4; ++j)
-         perlin.transform[i][j] = transform(j, i);
+        for (int j = 0; j < 4; ++j)
+            perlin.transform[i][j] = transform(j, i);
 
     perlin.transform[0] *= -1;
-     
- 
-     vkCmdPushConstants(cmd, m_dsetCompute->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings), &perlin);
-     
-     nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
-     staging->cmdToBuffer(cmd, m_depth_texture.buffer, 0, 640 * 480 * sizeof(float), sensor.GetDepth());
-     
-     vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
-                               static_cast<uint32_t>(m_dsetCompWrites.size()), m_dsetCompWrites.data());
-     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline);
-     vkCmdDispatch(cmd, 256, 256, 256);
 
-       // Add memory barrier to ensure compute shader writes are visible to subsequent stages
+    vkCmdPushConstants(cmd, m_dsetCompute->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::PerlinSettings), &perlin);
+
+    nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
+    staging->cmdToBuffer(cmd, m_depth_texture.buffer, 0, 640 * 480 * sizeof(float), sensor.GetDepth());
+
+    // Convert color data from BYTE to glm::vec4 and fill BufferColorMap
+    const BYTE* colorData = sensor.GetColorRGBX();
+    std::vector<glm::vec4> colorVec4Data(640 * 480);
+    for (int i = 0; i < 640 * 480; ++i) {
+        colorVec4Data[i] = ConvertColorToVec4(&colorData[i * 4]);
+    }
+    staging->cmdToBuffer(cmd, m_texture_colors.buffer, 0, sizeof(glm::vec4) * 640 * 480, colorVec4Data.data());
+
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetCompute->getPipeLayout(), 0,
+                              static_cast<uint32_t>(m_dsetCompWrites.size()), m_dsetCompWrites.data());
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_computePipeline);
+    vkCmdDispatch(cmd, 256, 256, 256);
+
+    // Add memory barrier to ensure compute shader writes are visible to subsequent stages
     VkMemoryBarrier memoryBarrier = {};
     memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     memoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     memoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     vkCmdPipelineBarrier(
-      cmd,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, // Source stage
-      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, // Destination stage
-      0,
-      1, &memoryBarrier,
-      0, nullptr,
-      0, nullptr
+        cmd,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, // Source stage
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, // Destination stage
+        0,
+        1, &memoryBarrier,
+        0, nullptr,
+        0, nullptr
     );
-     gpu_ini = true;
-   }
+    gpu_ini = true;
+}
  
  
    void destroyResources()
    {
-    m_dsetCompute->deinit();
-    m_dsetRaster->deinit();
-    vkDestroyPipeline(m_device, m_computePipeline, nullptr);
-    vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr);
+     m_dsetCompute->deinit();
+     m_dsetRaster->deinit();
+     vkDestroyPipeline(m_device, m_computePipeline, nullptr);
+     vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr);
   
-    m_alloc->destroy(m_vertices);
-    m_alloc->destroy(m_indices);
-    m_alloc->destroy(m_frameInfo);
-    m_alloc->destroy(m_bufferGrid);
-    m_alloc->destroy(m_bufferGridWeights);
-    m_alloc->destroy(m_depth_texture);
-    m_alloc->destroy(m_texture);
-    m_alloc->destroy(m_texture_weights);
+     m_alloc->destroy(m_vertices);
+     m_alloc->destroy(m_indices);
+     m_alloc->destroy(m_frameInfo);
+     m_alloc->destroy(m_bufferGrid);
+     m_alloc->destroy(m_bufferGridWeights);
+     m_alloc->destroy(m_bufferGridColors);
+     m_alloc->destroy(m_depth_texture);
+     m_alloc->destroy(m_texture);
+     m_alloc->destroy(m_texture_weights);
+     m_alloc->destroy(m_texture_colors);
    }
  
    void createVkBuffers()
@@ -527,6 +547,13 @@
 
     m_dutil->DBG_NAME(m_bufferGrid.buffer);
     
+    //voxel colors
+    m_bufferGridColors = m_alloc->createBuffer(sizeof(glm::vec4) * m_settings.getTotalSize(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_descBufInfoGridColors = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferGridColors.buffer, 0, VK_WHOLE_SIZE});
+
+    m_dutil->DBG_NAME(m_bufferGridColors.buffer);
+
     //weights
     m_bufferGridWeights = m_alloc->createBuffer(sizeof(float) * m_settings.getTotalSize(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -541,6 +568,12 @@
 
     m_dutil->DBG_NAME(m_bufferGridWeights.buffer);
 
+    //colors buffer
+    m_texture_colors = m_alloc->createBuffer(sizeof(glm::vec4) * 640 * 480, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_descBufInfoColor = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_texture_colors.buffer, 0, VK_WHOLE_SIZE});
+
+    m_dutil->DBG_NAME(m_texture_colors.buffer);
 
      m_app->submitAndWaitTempCmdBuffer(cmd);
    }
@@ -549,6 +582,7 @@
    {
     m_dsetRaster->addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL); // frameInfo
     m_dsetRaster->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL); // voxel_grid
+    m_dsetRaster->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL); // voxel_colors
     m_dsetRaster->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
   
     const VkPushConstantRange push_constant_ranges = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -561,6 +595,7 @@
     m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 0, m_descBufInfo.get()));
     // m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, &m_texture.descriptor));
     m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, m_descBufInfoGrid.get()));
+    m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 2, m_descBufInfoGridColors.get()));
   
     VkPipelineRenderingCreateInfo prend_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     prend_info.colorAttachmentCount    = 1;
@@ -593,6 +628,8 @@
    nvvk::Buffer   m_texture;
    nvvk::Buffer   m_texture_weights;
    nvvk::Buffer   m_depth_texture;
+   nvvk::Buffer   m_texture_colors;
+
    VkDevice        m_device          = VK_NULL_HANDLE;
    VkDescriptorSet m_descriptorSet   = VK_NULL_HANDLE;
    VkPipeline      m_computePipeline = VK_NULL_HANDLE;  // The graphic pipeline to render
@@ -609,14 +646,18 @@
    nvvk::Buffer m_frameInfo;
    nvvk::Buffer m_bufferGrid;
    nvvk::Buffer m_bufferGridWeights;
+   nvvk::Buffer m_bufferGridColors;
  
    nvvkhl::Application*                    m_app = nullptr;
    std::vector<VkWriteDescriptorSet>       m_dsetCompWrites;
    std::vector<VkWriteDescriptorSet>       m_dsetRastWrites;
+
    std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfo;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoGrid;
+  std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoGridColors;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoWeights;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoDepth;
+  std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoColor;
  
    Settings m_settings = {};
  

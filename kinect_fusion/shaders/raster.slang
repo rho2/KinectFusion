@@ -50,6 +50,7 @@ struct PSout
 [[vk::push_constant]] ConstantBuffer<PushConstant> pushConst;
 [[vk::binding(0, 0)]] ConstantBuffer<FrameInfo> frameInfo;
 [[vk::binding(1, 0)]] StructuredBuffer<float> voxel_grid;
+[[vk::binding(2, 0)]] StructuredBuffer<float4> voxel_color;
 
 // Ray structure
 struct Ray
@@ -99,6 +100,12 @@ float getValueAt(float3 p) {
     int3 scaled = clamp(int3(p * (pushConst.size - 1)), 0, pushConst.size - 1);
     uint index = scaled.z * pushConst.size * pushConst.size  + scaled.y * pushConst.size  + scaled.x;
     return voxel_grid[index];
+}
+
+float4 getColorAt(float3 p) {
+    int3 scaled = clamp(int3(p * (pushConst.size - 1)), 0, pushConst.size - 1);
+    uint index = scaled.z * pushConst.size * pushConst.size + scaled.y * pushConst.size + scaled.x;
+    return voxel_color[index];
 }
 
 float3 computeVolumeGradient(float3 p, float voxelSize)
@@ -176,6 +183,7 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
     discard;
 
   float3 normal = computeVolumeGradient(hitPoint, 1.0 / pushConst.size);
+  float4 color = getColorAt(hitPoint);
   if (dot(ray.direction, normal) > 0)
     normal *= -1;
 
@@ -187,7 +195,7 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
   } else {
     float3 lightDir = (frameInfo.headlight == 1) ? -ray.direction : normalize(frameInfo.toLight);
     float3 V = -ray.direction;
-    output.color.xyz =  simpleShading(V, lightDir, normal, pushConst.color.xyz);
+    output.color.xyz =  simpleShading(V, lightDir, normal, color.xyz);
   }
 
   output.color.w = 1;
