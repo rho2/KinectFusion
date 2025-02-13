@@ -149,21 +149,7 @@ int main()
         icpSettings.lastFramePose[i].w = sensor.GetTrajectory().row(i).w();
     }
 
-    {
-        auto P = BufferAta.map<float>();
-        for (auto i = 0; i < groupCount * 6 * 6; ++i)
-        {
-            P[i] = 0.0f;
-        }
-    }
-
-    {
-        auto P = BufferAtb.map<float>();
-        for (auto i = 0; i < groupCount * 6; ++i)
-        {
-            P[i] = 0.0f;
-        }
-    }
+    
 
     std::vector<Vector4f> initialVertexMap(width * height);
     std::vector<Vector4f> initialNormalMap(width * height);
@@ -179,7 +165,7 @@ int main()
         BuffferLastVertexMap.fillWith(initialVertexMap.data());
         BufferNormalMap.fillWith(normalMap.data());
         BufferLastNormalMap.fillWith(initialNormalMap.data());
-        const int icp_turns = 10;
+        const int icp_turns = 30;
         Matrix4f foo = lastFrame;
         for (int i = 0; i < 4; ++i)
         {
@@ -189,33 +175,34 @@ int main()
             icpSettings.pose[i].w = foo.row(i).w();
         }
 
-        for (int turn = 0; turn < 10; turn++)
+        for (int turn = 0; turn < icp_turns; turn++)
         {
 
+            {
+                auto P = BufferAta.map<float>();
+                for (auto i = 0; i < groupCount * 6 * 6; ++i)
+                {
+                    P[i] = 0.0f;
+                }
+            }
+        
+            {
+                auto P = BufferAtb.map<float>();
+                for (auto i = 0; i < groupCount * 6; ++i)
+                {
+                    P[i] = 0.0f;
+                }
+            }
+
             auto &CmdBuffer = vulkanWrapper.startCommandBuffer();
-
-            // if (sensor.m_increment == 0) {
-            //     CmdBuffer.fillBuffer(*BufferCurrentVertexMap._buffer, 0, byte_size, 0);
-            //     CmdBuffer.fillBuffer(*BuffferLastVertexMap._buffer, 0, byte_size, 0);
-            // }
-
             Matrix3f intrinsics = sensor.GetDepthIntrinsics();
-            // for (int i = 0; i < 3; ++i) {
-            //     icpSettings.cameraProjection[i].x = intrinsics.row(i).x();
-            //     icpSettings.cameraProjection[i].y = intrinsics.row(i).y();
-            //     icpSettings.cameraProjection[i].z = intrinsics.row(i).z();
-            // }
+
             icpSettings.width = 640;
             icpSettings.distanceThreshold = 0.1f;
-            icpSettings.angleThreshold = 0.1f;
-
-            // std::cout << "vertextMap : ";
-            // printVector(vertexMap);
-            // std::cout << "normalMap : ";
-            // printVector(normalMap);
+            icpSettings.angleThreshold = 1.05f;
 
             vulkanWrapper.addCommandPushConstants(icpSettings);
-            vulkanWrapper.submitAndWait(width, height, 1);
+            vulkanWrapper.submitAndWait(width / 16, height, 1);
             Eigen::Matrix<float, 6, 6> ATA;
             {
                 auto P = BufferAta.map<float>();
@@ -223,10 +210,7 @@ int main()
                 {
                     ATA((i % 36) / 6, (i % 36) % 6) += P[i];
                 }
-                // std::cout << "ATA: " << std::endl;
-                // std::cout << P[0] << " " << P[1] << " " << P[2] << " " << P[3] << " " << P[4] << " " << P[5] << std::endl;
             }
-            // std::cout << ATA << std::endl;
 
             Eigen::Vector<float, 6> ATB;
             {
@@ -236,7 +220,6 @@ int main()
                     ATB(i % 6) += P[i];
                 }
             }
-            // std::cout << ATB << std::endl;
 
             JacobiSVD<MatrixXf> svd(ATA, ComputeThinU | ComputeThinV);
             VectorXf x = svd.solve(ATB);
@@ -244,7 +227,6 @@ int main()
 
             float alpha = x(0), beta = x(1), gamma = x(2);
 
-            // Build the pose matrix
             Matrix3f rotation = AngleAxisf(alpha, Vector3f::UnitX()).toRotationMatrix() *
                                 AngleAxisf(beta, Vector3f::UnitY()).toRotationMatrix() *
                                 AngleAxisf(gamma, Vector3f::UnitZ()).toRotationMatrix();

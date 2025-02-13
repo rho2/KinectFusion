@@ -53,8 +53,9 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     float3 v = currentVertexMap[initialPixelIndex].xyz;
     float3 n = currentNormalMap[initialPixelIndex].xyz;
 
-    if (v.z < -1000 || n.z < -1000 || isnan(v.z) || isnan(n.z)) {
-        return;
+    bool valid = true;
+    if (v.z < -10000 || n.z < -10000 || isnan(v.z) || isnan(n.z)) {
+        valid = false;
     }
     // VertexNormal u_hat = predictedFrame[index];
     // compute v_hat calculate t_(k-1,k). bring in to camera image space. apply perspective. we now have u_hat. check the value of u_hat from the past vertex map
@@ -65,14 +66,14 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     uint lastPixelIndex = (uint)pixelPos.x + (uint)pixelPos.y * icpSettings.width;
     float3 v_hat = lastVertexMap[lastPixelIndex].xyz;
     float3 n_hat = lastNormalMap[lastPixelIndex].xyz;
-    if (v_hat.z < -1000 || n_hat.z < -1000) {
-        return;
+    if (v_hat.z < -10000 || n_hat.z < -10000) {
+        valid = false;
     }
 
     float3 transformedNormal = mul(icpSettings.lastFramePose , float4(n,0)).xyz;
 
     if (length(v_hat - v) > icpSettings.distanceThreshold || dot(normalize(n), normalize(n_hat)) > icpSettings.angleThreshold) {
-        return;
+        valid = false;
     }
 
     float3x3 skewSymmetricCurrentV = float3x3(0, -v.z, v.y,
@@ -88,7 +89,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     for (int i = 0; i < 6; i++) {
         [unroll]
         for (int j = 0; j < 6; j++) {
-            partialAta[i][j] = at_array[i] * at_array[j];
+            partialAta[i][j] = valid ? at_array[i] * at_array[j] : 0;
         }
     }
     
@@ -101,7 +102,7 @@ void ICPCalcMain(uint3 threadId: SV_DispatchThreadID, uint3 gtid: SV_GroupThread
     float b = dot(n_hat, v_hat - v);
     [unroll]
     for (int i = 0; i < 6; i++) {
-        partialAtb[i] = b * at_array[i];
+        partialAtb[i] = valid ? b * at_array[i] : 0;
     }
 
     localATA[gtid.x] = partialAta;
