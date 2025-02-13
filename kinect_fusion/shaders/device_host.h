@@ -46,4 +46,7 @@ struct PerlinSettings
 {
     mat4 transform;
     uint size;
+    uint size2;
+    uint size3;
+    float inv_scale;
 };

@@ -22,15 +22,10 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
     if (threadIdx.x >= perlinSettings.size || threadIdx.y >= perlinSettings.size || threadIdx.z >= perlinSettings.size)
         return;
 
-    uint index = threadIdx.z * perlinSettings.size * perlinSettings.size + threadIdx.y * perlinSettings.size + threadIdx.x;
-
-    float scale = perlinSettings.size/2.0;
-    int offset = perlinSettings.size/2;
+    uint index = threadIdx.z * perlinSettings.size2 + threadIdx.y * perlinSettings.size + threadIdx.x;
 
     float4 coord;
-    coord.x =  -1.0f * (threadIdx.x - offset) / scale;
-    coord.y = (threadIdx.z) / scale;
-    coord.z = (threadIdx.y) / scale;
+    coord.xyz = perlinSettings.inv_scale * float3(threadIdx.xzy - int3(perlinSettings.size/2, 0, 0));
     coord.w = 1.0;
 
     float4 camera_coord = mul(perlinSettings.transform, coord);
@@ -39,10 +34,7 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
     if (pix_coord.z <= 0.0)
         return;
 
-    uint2 pix = uint2(
-        int(pix_coord.x / pix_coord.z),
-        int(pix_coord.y / pix_coord.z)
-    );
+    int2 pix = int2(pix_coord.xy / pix_coord.z);
 
     if (pix.x < 0 || pix.x >= 640 || pix.y < 0 || pix.y >= 480)
         return;
@@ -53,14 +45,14 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
     if (isnan(d))
         return;
 
-    float sdf = d - camera_coord.z;
+    float sdf = d - float(camera_coord.z);
 
     if (sdf > -TRUNC_DISTANCE) {
         float old_weight = voxel_grid_weights[index];
         float new_weight = old_weight + 1;
 
         float old_value = voxel_grid[index];
-        float new_value = (old_value * 1 + sdf) / 2;
+        float new_value = (old_value * old_weight + sdf) / new_weight;
 
         voxel_grid[index] = clamp(new_value, -TRUNC_DISTANCE, TRUNC_DISTANCE);
         voxel_grid_weights[index] = new_weight;
