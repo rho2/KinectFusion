@@ -72,6 +72,10 @@ class Texture3dSample : public nvvkhl::IAppElement
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
   };
 
+  int counter = 1;
+  int counter2 = 0;
+  bool run = false;
+
 public:
   Texture3dSample()           = default;
   ~Texture3dSample() override = default;
@@ -135,6 +139,14 @@ public:
         "Render normals instead of pure image");
     PE::end();
 
+    PE::begin();
+    if (PE::Button("Run Animation", {-1, 20})) {
+      run = true;
+      counter = 1;
+      counter2 = 0;
+    }
+    PE::end();
+
     if(redoTexture)
     {
       vkDeviceWaitIdle(m_device);
@@ -160,9 +172,17 @@ public:
   {
     const nvvk::DebugUtil::ScopedCmdLabel sdbg = m_dutil->DBG_SCOPE(cmd);
 
-    if(m_dirty)
-    {
-      setData(cmd);
+    if (run) {
+      counter2++;
+
+      if (counter2 % 10 == 0) {
+        fillPerlinImage(counter++);
+        setData(cmd);
+      }
+
+      if (counter > 80) {
+        run = false;
+      }
     }
 
     const float aspect_ratio = m_gBuffers->getAspectRatio();
@@ -278,12 +298,12 @@ private:
                                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   }
 
-  void fillPerlinImage()
+  void fillPerlinImage(int index = 0)
   {
     nvh::ScopedTimer st(__FUNCTION__);
 
     std::ostringstream filename;
-    filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << 0 << ".bin";
+    filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << index << ".bin";
 
     std::ifstream file(filename.str(), std::ios::binary);
 
