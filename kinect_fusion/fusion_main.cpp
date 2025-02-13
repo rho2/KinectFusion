@@ -35,11 +35,13 @@ public:
     }
 };
 
-void DumpToFile(const void *Data, const uint32_t size, const std::string &prefix, const uint32_t index) {
+void DumpToFile(const void *Data, const uint32_t voxel_size, const uint32_t size, const std::string &prefix, const uint32_t index) {
     std::ostringstream filename;
     filename << prefix << "_" << std::setw(4) << std::setfill('0') << index << ".bin";
 
     std::ofstream file(filename.str(), std::ios::binary);
+    file.write(reinterpret_cast<const char *>(&voxel_size), sizeof(voxel_size));
+
     file.write(reinterpret_cast<const char *>(Data), size);
     file.close();
 
@@ -69,7 +71,7 @@ int main(int argc, char **argv) {
 
     {
         auto P = BufferVoxelGrid.map<float>();
-        for (auto i = 0; i < size * size * size; ++i) { P[i] = 0.1f; }
+        for (auto i = 0; i < size * size * size; ++i) { P[i] = TRUNC_DISTANCE + 1; }
     }
 
     {
@@ -103,7 +105,6 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
                 perlinSettings.transform[i][j] = transform(j, i);
-;
 
         vulkanWrapper.addCommandPushConstants(perlinSettings);
         vulkanWrapper.submitAndWait(size, size, size);
@@ -116,6 +117,6 @@ int main(int argc, char **argv) {
 
     {
         auto P = BufferVoxelGrid.map<float>();
-        DumpToFile(P.data, byte_size, "sdf_values", 0);
+        DumpToFile(P.data, size, byte_size, "sdf_values", 0);
     }
 }

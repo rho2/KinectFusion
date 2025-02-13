@@ -63,16 +63,16 @@ class Texture3dSample : public nvvkhl::IAppElement
 {
   struct Settings
   {
-    uint32_t             powerOfTwoSize = 8;
+    uint32_t             voxelSize;
     bool                 renderNormals  = false;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
     int                  headlight      = 1;
-    glm::vec3            toLight        = {1.F, 1.F, 1.F};
+    glm::vec3            toLight        = {0.F, 1.F, 0.F};
     int                  steps          = 1000;
     glm::vec4            surfaceColor   = {0.8F, 0.8F, 0.8F, 1.0F};
-    uint32_t             getSize() { return 1 << powerOfTwoSize; }
+    uint32_t             getSize() { return voxelSize; }
     uint32_t             getTotalSize() { return getSize() * getSize() * getSize(); }
   };
 
@@ -98,8 +98,7 @@ public:
     m_dsetRaster  = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
     m_depthFormat = nvvk::findDepthFormat(app->getPhysicalDevice());
 
-    voxel_grid.resize(m_settings.getTotalSize());
-    std::fill(voxel_grid.begin(), voxel_grid.end(), 1.0f);
+    fillPerlinImage();
 
     createVkBuffers();
     createTextureBuffers();
@@ -108,7 +107,7 @@ public:
 
     // Setting the default camera
     CameraManip.setClipPlanes({0.01F, 100.0F});
-    CameraManip.setLookat({-0.5F, 0.5F, 2.0F}, {0.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F});
+    CameraManip.setLookat({-0.58981F, 0.25795F, -0.26918F}, {-0.03199F, -0.12156F, -0.08628F}, {0.0F, 1.0F, 0.0F});
   };
 
   void onDetach() override
@@ -131,7 +130,7 @@ public:
     ImGui::Text("Ray Marching");
     PE::begin();
     PE::entry(
-        "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 500); }, "Number of maximum steps.");
+        "Steps", [&] { return ImGui::SliderInt("##2", (int*)&m_settings.steps, 1, 1000); }, "Number of maximum steps.");
     PE::end();
 
     PE::begin();
@@ -230,19 +229,15 @@ private:
   void createTextureBuffers() {
     assert(!m_texture.image);
 
-    uint32_t realSize = m_settings.getSize();
-
-    VkFormat imgFormat = VK_FORMAT_R32_SFLOAT;
-
     VkImageCreateInfo create_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     create_info.imageType     = VK_IMAGE_TYPE_3D;
-    create_info.format        = imgFormat;
+    create_info.format        = VK_FORMAT_R32_SFLOAT;
     create_info.mipLevels     = 1;
     create_info.arrayLayers   = 1;
     create_info.samples       = VK_SAMPLE_COUNT_1_BIT;
-    create_info.extent.width  = realSize;
-    create_info.extent.height = realSize;
-    create_info.extent.depth  = realSize;
+    create_info.extent.width  = 1;
+    create_info.extent.height = 1;
+    create_info.extent.depth  = 1;
     create_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
                         | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
@@ -257,7 +252,7 @@ private:
     VkImageViewCreateInfo view_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view_info.pNext                           = nullptr;
     view_info.image                           = texImage.image;
-    view_info.format                          = imgFormat;
+    view_info.format                          = VK_FORMAT_R32_SFLOAT;
     view_info.viewType                        = VK_IMAGE_VIEW_TYPE_3D;
     view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     view_info.subresourceRange.baseMipLevel   = 0;
@@ -290,8 +285,6 @@ private:
   void fillPerlinImage()
   {
     nvh::ScopedTimer st(__FUNCTION__);
-    uint32_t realSize = m_settings.getSize();
-    voxel_grid.reserve(realSize);
 
     std::ostringstream filename;
     filename << "sdf_values" << "_" << std::setw(4) << std::setfill('0') << 0 << ".bin";
@@ -303,8 +296,15 @@ private:
       return;
     }
 
-    file.read(reinterpret_cast<char*>(voxel_grid.data()), voxel_grid.size() * sizeof(float));
-    std::cout << "Read file: " << filename.str() << "\n";
+    file.read(reinterpret_cast<char*>(&m_settings.voxelSize), sizeof(uint32_t));
+
+
+    uint32_t realSize = m_settings.getSize();
+    uint32_t totalSize = realSize * realSize * realSize;
+
+    voxel_grid.resize(totalSize);
+    file.read(reinterpret_cast<char*>(voxel_grid.data()), totalSize * sizeof(float));
+    std::cout << "Read file: " << filename.str() << " Size: " << m_settings.voxelSize << "\n";
   }
 
   void setData(VkCommandBuffer cmd)
@@ -312,19 +312,8 @@ private:
     const nvvk::DebugUtil::ScopedCmdLabel sdbg = m_dutil->DBG_SCOPE(cmd);
     assert(m_texture.image);
 
-    uint32_t realSize = m_settings.getSize();
-
-    fillPerlinImage();
-
-    const VkOffset3D               offset{0};
-    const VkImageSubresourceLayers subresource{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    const VkExtent3D               extent{realSize, realSize, realSize};
-    nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
     nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
-    staging->cmdToImage(cmd, m_texture.image, offset, extent, subresource, voxel_grid.size() * sizeof(float), voxel_grid.data());
-
-    nvvk::cmdBarrierImageLayout(cmd, m_texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    staging->cmdToBuffer(cmd, m_bufferGrid.buffer, 0, voxel_grid.size() * sizeof(float), voxel_grid.data());
 
     m_dirty = false;
   }
@@ -337,6 +326,7 @@ private:
     m_alloc->destroy(m_vertices);
     m_alloc->destroy(m_indices);
     m_alloc->destroy(m_frameInfo);
+    m_alloc->destroy(m_bufferGrid);
     m_alloc->destroy(m_texture);
   }
 
@@ -356,13 +346,17 @@ private:
                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     m_dutil->DBG_NAME(m_frameInfo.buffer);
 
+    m_bufferGrid = m_alloc->createBuffer(sizeof(float) * m_settings.getTotalSize(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_dutil->DBG_NAME(m_bufferGrid.buffer);
+
     m_app->submitAndWaitTempCmdBuffer(cmd);
   }
 
   void createGraphicPipeline()
   {
     m_dsetRaster->addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL);
-    m_dsetRaster->addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_ALL);
+    m_dsetRaster->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
     m_dsetRaster->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     const VkPushConstantRange push_constant_ranges = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -371,8 +365,11 @@ private:
 
     // Descriptors writes
     m_descBufInfo = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_frameInfo.buffer, 0, VK_WHOLE_SIZE});
+    m_descBufInfoGrid = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferGrid.buffer, 0, VK_WHOLE_SIZE});
+
     m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 0, m_descBufInfo.get()));
-    m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, &m_texture.descriptor));
+    // m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, &m_texture.descriptor));
+    m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, m_descBufInfoGrid.get()));
 
     VkPipelineRenderingCreateInfo prend_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     prend_info.colorAttachmentCount    = 1;
@@ -416,10 +413,12 @@ private:
   nvvk::Buffer m_vertices;  // Buffer of the vertices
   nvvk::Buffer m_indices;   // Buffer of the indices
   nvvk::Buffer m_frameInfo;
+  nvvk::Buffer m_bufferGrid;
 
   nvvkhl::Application*                    m_app = nullptr;
   std::vector<VkWriteDescriptorSet>       m_dsetRastWrites;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfo;
+  std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoGrid;
 
   Settings m_settings = {};
 

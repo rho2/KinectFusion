@@ -21,6 +21,8 @@
 #define inline
 #endif  // _glsl
 
+#define TRUNC_DISTANCE .1f
+
 struct PushConstant
 {
   mat4  transfo;
