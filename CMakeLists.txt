@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 project(vk_mini_samples LANGUAGES C CXX)
 
+find_package(CUDAToolkit)
+if(CUDAToolkit_FOUND)
+    set(CMAKE_CUDA_ARCHITECTURES "native")
+    enable_language(CUDA)
+endif()
+
+find_package (Python COMPONENTS Interpreter REQUIRED)
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_CXX_STANDARD 20)
 

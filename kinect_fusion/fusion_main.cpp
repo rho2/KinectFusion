@@ -36,6 +36,7 @@ struct Setting {
     uint32_t size = 256;
     bool every_step = false;
     bool cpu = false;
+    bool cuda = false;
 };
 
 void ParseCommandLine(int argc, char** argv, Setting& settings) {
@@ -65,7 +66,13 @@ void ParseCommandLine(int argc, char** argv, Setting& settings) {
             settings.every_step = true;
         } else if (arg == "-c" || arg == "--cpu") {
             settings.cpu = true;
-        }else {
+        }
+#ifdef CUDA_AVAILABLE
+        else if (arg == "-u" || arg == "--cuda") {
+            settings.cuda = true;
+        }
+#endif
+        else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             std::cerr << "Usage: " << argv[0] << " [-f filename] [-s size] [-e]" << std::endl;
             exit(EXIT_FAILURE);
@@ -208,11 +215,11 @@ void run_cpu(VirtualSensor &sensor, const Setting& settings) {
                     const float sdf = d - camera_coord.z();
 
                     if (sdf > -TRUNC_DISTANCE) {
-                        const float old_weight = voxel_grid_weights[index];
-                        const float new_weight = old_weight + 1;
+                        float old_weight = voxel_grid_weights[index];
+                        float new_weight = old_weight + 1;
 
-                        const float old_value = voxel_grid[index];
-                        const float new_value = (old_value * 1 + sdf) / 2;
+                        float old_value = voxel_grid[index];
+                        float new_value = (old_value * old_weight + sdf) / new_weight;
 
                         voxel_grid[index] = (new_value > TRUNC_DISTANCE)? TRUNC_DISTANCE : (new_value < -TRUNC_DISTANCE)? -TRUNC_DISTANCE: new_value;
                         voxel_grid_weights[index] = new_weight;
@@ -233,6 +240,30 @@ void run_cpu(VirtualSensor &sensor, const Setting& settings) {
     DumpToFile(voxel_grid.get(), size, byte_size, "sdf_values", 0);
 }
 
+#ifdef CUDA_AVAILABLE
+void run_cuda(VirtualSensor *sensor, const Setting& settings);
+bool hack_ProcessNextFrame(VirtualSensor *sensor) {
+    return sensor->ProcessNextFrame();
+}
+glm::mat4 hack_GetTransform(VirtualSensor *sensor) {
+    Matrix4f transform = sensor->GetTrajectory() * sensor->GetDepthExtrinsics();
+
+    glm::mat4 transform_;
+
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+             transform_[i][j] = transform(j, i);
+    transform_[0] *= -1;
+
+    return transform_;
+}
+
+float* hack_GetDepth(VirtualSensor *sensor) {
+    return sensor->GetDepth();
+}
+
+#endif
+
 int main(int argc, char **argv) {
     VirtualSensor sensor;
 
@@ -246,7 +277,10 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    if (settings.cpu) {
+    if (settings.cuda) {
+        std::cout << "Running on CUDA" << std::endl;
+        run_cuda(&sensor, settings);
+    } else if (settings.cpu) {
         std::cout << "Running on CPU" << std::endl;
         run_cpu(sensor, settings);
     } else {

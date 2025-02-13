@@ -20,13 +20,42 @@ target_link_libraries("vk_mini_${PROJECT_NAME}" PUBLIC helper)
 
 find_package(OpenMP)
 
-
 create_sample(fusion_exe
     SOURCES fusion_main.cpp
     SHADER_HEADERS ${SHD_DIR}/device_host.h
     SHADER_SLANG ${SHD_DIR}/perlin.slang
 )
 target_link_libraries(vk_mini_fusion_exe PUBLIC helper)
+
+if(CUDAToolkit_FOUND)
+    set(_cuda_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/cuda_gen")
+    file(MAKE_DIRECTORY ${_cuda_gen_dir})
+
+    add_custom_command(
+        OUTPUT "${_cuda_gen_dir}/fusion_cuda.cu"
+        COMMAND
+            ${Slang_slangc_EXE}
+            -target cuda
+            -o "${_cuda_gen_dir}/tmp_fusion_cuda.cu"
+            -I${SHD_DIR} -I${SAMPLES_ROOT_DIR} -I${NVPRO_CORE_DIR}
+            ${SHD_DIR}/perlin.slang
+        COMMAND
+            ${Python_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/fix_generated_cuda.py
+            "${_cuda_gen_dir}/tmp_fusion_cuda.cu"
+        DEPENDS
+            ${SHD_DIR}/perlin.slang
+            ${CMAKE_CURRENT_SOURCE_DIR}/fix_generated_cuda.py
+    )
+    add_library(compiled_cuda INTERFACE "${_cuda_gen_dir}/fusion_cuda.cu")
+
+    add_library(cuda_fusion STATIC fusion.cu)
+    target_link_libraries(cuda_fusion PUBLIC CUDA::cudart helper compiled_cuda)
+    target_compile_definitions(cuda_fusion PUBLIC CUDA_AVAILABLE)
+    target_compile_options(cuda_fusion PRIVATE -diag-suppress=20013 -diag-suppress=20015)
+    target_link_libraries(vk_mini_fusion_exe PUBLIC cuda_fusion)
+    target_include_directories(cuda_fusion PRIVATE ${_cuda_gen_dir})
+endif()
 
 create_sample(viewer
         SOURCES viewer.cpp

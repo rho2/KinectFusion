@@ -3,10 +3,12 @@ from pathlib import Path
 from random import shuffle
 import json
 
-def run_single(cmd: Path, n: int, cpu: bool) -> float:
+def run_single(cmd: Path, n: int, runtime: str) -> float:
     cmd = [cmd, "--size", str(n)]
-    if cpu:
+    if runtime == "cpu":
         cmd.append("--cpu")
+    if runtime == "cuda":
+        cmd.append("--cuda")
 
     o = check_output(cmd, encoding="utf-8", universal_newlines=True)
 
@@ -22,7 +24,7 @@ def main():
     exe = Path().cwd() / "bin_x64" / "Release" / "vk_mini_fusion_exe_app"
 
     all_cmds = [
-        (n, c) for n  in range(50, 401, 50) for _ in range(1) for c in (True, False)
+        (n, c) for n  in range(50, 401, 50) for _ in range(1) for c in ("cpu", "gpu", "cuda")
     ]
     shuffle(all_cmds)
 
@@ -43,7 +45,7 @@ def main():
 
         final_results.append(
                 {
-                    "type": "cpu" if c else "gpu",
+                    "type": c,
                     "n": n,
                     "res": res
                 }
