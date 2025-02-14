@@ -16,18 +16,8 @@ cmake --workflow --preset  release
 
 ## Running
 
-### Volumetric integration
 ```
-./bin_x64/Release/vk_mini_fusion_exe_app <path_to_dataset>
-```
-If not dataset is specified, it will default to "../Data/rgbd_dataset_freiburg1_xyz/"
-
-This binary will run the volumetric integration on the provided dataset and write a file called sdf_values_0000.bin containing the final TSDF.
-
-### Rendering
-
-```
-./bin_x64/Release/vk_mini_viewer_app
+./bin_x64/Release/vk_mini_fusion_icp_exe
 ```
 
-Will open the sdf_values_0000.bin file and raytrace it to show the rendering code.
+This runs the icp algorithm for one frame of the data.
