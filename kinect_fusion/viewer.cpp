@@ -61,6 +61,7 @@ class Texture3dSample : public nvvkhl::IAppElement
   {
     uint32_t             voxelSize;
     bool                 renderNormals  = false;
+    bool                 renderLerp     = true;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
@@ -137,6 +138,12 @@ public:
     PE::entry(
         "Render normals", [&] { return ImGui::Checkbox("##4", &s.renderNormals); },
         "Render normals instead of pure image");
+    PE::end();
+
+    PE::begin();
+    PE::entry(
+        "LERP", [&] { return ImGui::Checkbox("##6", &s.renderLerp); },
+        "Calculate better zero crossing by lerping");
     PE::end();
 
     PE::begin();
@@ -224,6 +231,7 @@ public:
       pushConstant.transfo   = glm::mat4(1);  // Identity
       pushConstant.size      = m_settings.getSize();
       pushConstant.render_normals = m_settings.renderNormals;
+      pushConstant.render_lerp = m_settings.renderLerp;
       vkCmdPushConstants(cmd, m_dsetRaster->getPipeLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                          0, sizeof(DH::PushConstant), &pushConstant);
 

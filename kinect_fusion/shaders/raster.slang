@@ -111,7 +111,29 @@ float3 computeVolumeGradient(float3 p, float voxelSize)
   return normalize(float3(dx, dy, dz));
 }
 
-bool rayMarching(const float3 p1, const float3 p2, const int numSteps, const float threshold, out float3 hitPoint)
+bool rayMarchingLERP(const float3 p1, const float3 p2, const int numSteps, out float3 hitPoint) {
+    const float3 stepSize = (p2 - p1) / float(numSteps);
+    hitPoint = p1;
+    float prevValue = getValueAt(hitPoint);
+
+    for (int i = 0; i < numSteps; ++i) {
+        float3 newHitPoint = hitPoint + stepSize;
+        float currentValue = getValueAt(newHitPoint);
+
+        if (currentValue < 0) {
+            float t = clamp(prevValue / (prevValue - currentValue), 0.0f, 1.0f);
+            hitPoint = lerp(hitPoint, newHitPoint, t);
+            return true;
+        }
+
+        prevValue = currentValue;
+        hitPoint = newHitPoint;
+    }
+
+    return false;
+}
+
+bool rayMarching(const float3 p1, const float3 p2, const int numSteps, out float3 hitPoint)
 {
   const float3 stepSize = (p2 - p1) / float(numSteps);
   hitPoint = p1;
@@ -171,7 +193,11 @@ PSout fragmentMain(PSin stage, bool isFrontFacing : SV_IsFrontFace)
 
   // Ray-marching
   float3 hitPoint;
-  hit = rayMarching(p1, p2, pushConst.steps, pushConst.threshold, hitPoint);
+
+  if (pushConst.render_lerp)
+    hit = rayMarchingLERP(p1, p2, pushConst.steps, hitPoint);
+  else
+    hit = rayMarching(p1, p2, pushConst.steps, hitPoint);
   if (!hit)
     discard;
 
