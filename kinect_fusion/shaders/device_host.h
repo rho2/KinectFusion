@@ -50,3 +50,9 @@ struct PerlinSettings
     uint size3;
     float inv_scale;
 };
+
+struct ICPSettings {
+  uint numPoints;   
+  uint iterations;  
+  float voxelSize;  
+};

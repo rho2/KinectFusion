@@ -47,9 +47,10 @@
  #include "shaders/device_host.h"  // Shared between host and device
  }  // namespace DH
  
- #include "_autogen/raster_slang.h"
- #include "_autogen/perlin_slang.h"
- const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
+#include "_autogen/raster_slang.h"
+#include "_autogen/perlin_slang.h"
+#include "_autogen/icp_slang.h"
+const auto& comp_shd = std::vector<uint32_t>{std::begin(perlinSlang), std::end(perlinSlang)};
  
  
  #include "imgui/imgui_helper.h"
@@ -114,6 +115,7 @@
      createComputePipeline();
      //createTextureBuffers();
      //createTexture();
+     createICPPipeline();
      createGraphicPipeline();
  
      // Setting the default camera
@@ -182,10 +184,27 @@
    {
      const nvvk::DebugUtil::ScopedCmdLabel sdbg = m_dutil->DBG_SCOPE(cmd);
  
-     if(true)
+     if(sensor.ProcessNextFrame())
      {
        setData(cmd);
-     }
+  
+        runICP(cmd);
+        
+        glm::mat4 icpUpdate = glm::mat4(1.0f);
+        {
+
+            void* mapped = m_alloc->map(m_bufferICP);
+            icpUpdate = *(glm::mat4*)mapped;
+        }
+        Matrix4f currentTraj = sensor.GetTrajectory();
+        Eigen::Matrix4f icpUpdateEigen;
+        for(int i = 0; i < 4; i++)
+            for(int j = 0; j < 4; j++)
+                icpUpdateEigen(i,j) = icpUpdate[j][i];  // Eigen is column major
+        
+        Matrix4f newTraj = icpUpdateEigen * currentTraj;
+        sensor.m_trajectory.at(sensor.m_currentIdx) = newTraj;
+    }
  
      const float aspect_ratio = m_gBuffers->getAspectRatio();
      glm::vec3   eye;
@@ -193,7 +212,6 @@
      glm::vec3   up;
      CameraManip.getLookat(eye, center, up);
  
-     // Update Frame buffer uniform buffer
      DH::FrameInfo    finfo{};
      const glm::vec2& clip = CameraManip.getClipPlanes();
      finfo.view            = CameraManip.getMatrix();
@@ -411,6 +429,66 @@
      m_dirty = false;
    }
  
+   void createICPPipeline()
+   {
+       m_dsetICP = std::make_unique<nvvk::DescriptorSetContainer>(m_device);
+       m_dsetICP->addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+       m_dsetICP->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+       m_dsetICP->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+       m_dsetICP->addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+       m_dsetICP->addBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+       m_dsetICP->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
+   
+       VkPushConstantRange pushRange = { VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(DH::ICPSettings) };
+       m_dsetICP->initPipeLayout(1, &pushRange);
+   
+       VkShaderModule icpModule = nvvk::createShaderModule(m_device, &icpSlang[0], sizeof(icpSlang));
+       VkPipelineShaderStageCreateInfo stageInfo { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+       stageInfo.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+       stageInfo.module = icpModule;
+       stageInfo.pName  = "icpCompute";
+   
+       VkComputePipelineCreateInfo compInfo { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+       compInfo.layout = m_dsetICP->getPipeLayout();
+       compInfo.stage  = stageInfo;
+       vkCreateComputePipelines(m_device, {}, 1, &compInfo, nullptr, &m_icpPipeline);
+       m_dutil->DBG_NAME(m_icpPipeline);
+       vkDestroyShaderModule(m_device, icpModule, nullptr);
+   
+       m_dsetICPWrites.clear();
+       m_dsetICPWrites.push_back(m_dsetICP->makeWrite(0, 0, m_descBufInfoGrid.get()));       // voxel_grid
+       m_dsetICPWrites.push_back(m_dsetICP->makeWrite(0, 1, m_descBufInfoWeights.get()));    // voxel_grid_weights
+       m_dsetICPWrites.push_back(m_dsetICP->makeWrite(0, 2, m_descBufInfoGridColors.get()));   // voxel_color
+       m_dsetICPWrites.push_back(m_dsetICP->makeWrite(0, 3, m_descBufInfoPoints.get()));       // current frame points
+       m_dsetICPWrites.push_back(m_dsetICP->makeWrite(0, 4, m_descBufInfoICP.get()));          // icp_update
+   }
+
+   void runICP(VkCommandBuffer cmd)
+  {
+      DH::ICPSettings icp;
+      icp.numPoints  = m_settings.getSize();
+      icp.iterations = 1;
+      icp.voxelSize  = 0.01f;   
+
+      nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
+      staging->cmdToBuffer(cmd, m_bufferPoints.buffer, 0, 640 * 480 * sizeof(float), sensor.GetDepth()); 
+      vkCmdPushConstants(cmd, m_dsetICP->getPipeLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
+                          0, sizeof(DH::ICPSettings), &icp);
+
+      vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_dsetICP->getPipeLayout(), 0,
+                                static_cast<uint32_t>(m_dsetICPWrites.size()), m_dsetICPWrites.data());
+
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_icpPipeline);
+      vkCmdDispatch(cmd, 1, 1, 1);
+
+      VkMemoryBarrier memBarrier { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+      memBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+      memBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_HOST_BIT,
+                          0, 1, &memBarrier, 0, nullptr, 0, nullptr);
+  }
+
    void createComputePipeline()
    {
     nvvk::DebugUtil dbg(m_device);
@@ -511,6 +589,7 @@
      m_dsetRaster->deinit();
      vkDestroyPipeline(m_device, m_computePipeline, nullptr);
      vkDestroyPipeline(m_device, m_graphicsPipeline, nullptr);
+     vkDestroyPipeline(m_device, m_icpPipeline, nullptr);
   
      m_alloc->destroy(m_vertices);
      m_alloc->destroy(m_indices);
@@ -522,6 +601,8 @@
      m_alloc->destroy(m_texture);
      m_alloc->destroy(m_texture_weights);
      m_alloc->destroy(m_texture_colors);
+     m_alloc->destroy(m_bufferPoints);
+     m_alloc->destroy(m_bufferICP);
    }
  
    void createVkBuffers()
@@ -574,6 +655,23 @@
     m_descBufInfoColor = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_texture_colors.buffer, 0, VK_WHOLE_SIZE});
 
     m_dutil->DBG_NAME(m_texture_colors.buffer);
+
+    //icp stuff
+    VkDeviceSize ptsSize = sizeof(glm::vec4) * m_settings.getTotalSize();
+    m_bufferPoints = m_alloc->createBuffer(ptsSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_descBufInfoPoints = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferPoints.buffer, 0, VK_WHOLE_SIZE});
+    m_dutil->DBG_NAME(m_bufferPoints.buffer);
+    
+    // Create buffer for the ICP transformation update (a 4x4 matrix).
+    VkDeviceSize icpSize = sizeof(glm::mat4);
+    m_bufferICP = m_alloc->createBuffer(icpSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_descBufInfoICP = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferICP.buffer, 0, VK_WHOLE_SIZE});
+    m_dutil->DBG_NAME(m_bufferICP.buffer);
+
 
      m_app->submitAndWaitTempCmdBuffer(cmd);
    }
@@ -648,6 +746,19 @@
    nvvk::Buffer m_bufferGridWeights;
    nvvk::Buffer m_bufferGridColors;
  
+   //icp stuff
+    nvvk::Buffer   m_bufferICP;      // Buffer to store the ICP 4x4 update
+    nvvk::Buffer   m_bufferPoints;   // Buffer holding current frame point cloud for ICP
+
+    std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoICP;
+    std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoPoints;
+
+    std::unique_ptr<nvvk::DescriptorSetContainer> m_dsetICP;   // Descriptor set for ICP pipeline
+    std::vector<VkWriteDescriptorSet>       m_dsetICPWrites;  // Descriptor writes for ICP
+
+    VkPipeline m_icpPipeline = VK_NULL_HANDLE;  // ICP compute pipeline
+
+
    nvvkhl::Application*                    m_app = nullptr;
    std::vector<VkWriteDescriptorSet>       m_dsetCompWrites;
    std::vector<VkWriteDescriptorSet>       m_dsetRastWrites;

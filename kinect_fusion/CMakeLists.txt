@@ -5,7 +5,7 @@ set(SOURCES texture_3d.cpp)
 
 # Find all shader files
 set(SHD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set(SHADER_SLANG ${SHD_DIR}/perlin.slang ${SHD_DIR}/raster.slang)
+set(SHADER_SLANG ${SHD_DIR}/perlin.slang ${SHD_DIR}/raster.slang ${SHD_DIR}/icp.slang)
 set(SHADER_HEADERS ${SHD_DIR}/device_host.h)
 
 # Create the sample
