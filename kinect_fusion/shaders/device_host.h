@@ -32,6 +32,7 @@ struct PushConstant
   int   size;
   int render_normals;
   int render_lerp;
+  int render_color;
 };
 
 struct FrameInfo

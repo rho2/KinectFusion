@@ -62,6 +62,7 @@ class Texture3dSample : public nvvkhl::IAppElement
     uint32_t             voxelSize;
     bool                 renderNormals  = false;
     bool                 renderLerp     = true;
+    bool                 renderColor    = true;
     VkFilter             magFilter      = VK_FILTER_NEAREST;
     VkSamplerAddressMode addressMode    = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     DH::PerlinSettings   perlin         = DH::PerlinSettings();
@@ -144,6 +145,12 @@ public:
     PE::entry(
         "LERP", [&] { return ImGui::Checkbox("##6", &s.renderLerp); },
         "Calculate better zero crossing by lerping");
+    PE::end();
+
+    PE::begin();
+    PE::entry(
+        "Color", [&] { return ImGui::Checkbox("##8", &s.renderColor); },
+        "Render color");
     PE::end();
 
     PE::begin();
@@ -232,6 +239,7 @@ public:
       pushConstant.size      = m_settings.getSize();
       pushConstant.render_normals = m_settings.renderNormals;
       pushConstant.render_lerp = m_settings.renderLerp;
+      pushConstant.render_color = m_settings.renderColor;
       vkCmdPushConstants(cmd, m_dsetRaster->getPipeLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                          0, sizeof(DH::PushConstant), &pushConstant);
 
@@ -329,6 +337,22 @@ private:
     voxel_grid.resize(totalSize);
     file.read(reinterpret_cast<char*>(voxel_grid.data()), totalSize * sizeof(float));
     std::cout << "Read file: " << filename.str() << " Size: " << m_settings.voxelSize << "\n";
+
+    std::ostringstream filename_color;
+    filename_color << "sdf_colors" << "_" << std::setw(4) << std::setfill('0') << index << ".bin";
+
+    std::ifstream file_color(filename_color.str(), std::ios::binary);
+
+    if (!file_color) {
+      std::cerr << "Error opening file: " << filename_color.str() << std::endl;
+      return;
+    }
+
+    file_color.read(reinterpret_cast<char*>(&m_settings.voxelSize), sizeof(uint32_t));
+
+    color_grid.resize(totalSize);
+    file_color.read(reinterpret_cast<char*>(color_grid.data()), totalSize * sizeof(glm::vec4));
+    std::cout << "Read file: " << filename_color.str() << " Size: " << m_settings.voxelSize << "\n";
   }
 
   void setData(VkCommandBuffer cmd)
@@ -338,6 +362,7 @@ private:
 
     nvvk::StagingMemoryManager* staging = m_alloc->getStaging();
     staging->cmdToBuffer(cmd, m_bufferGrid.buffer, 0, voxel_grid.size() * sizeof(float), voxel_grid.data());
+    staging->cmdToBuffer(cmd, m_bufferGridColors.buffer, 0, color_grid.size() * sizeof(glm::vec4), color_grid.data());
 
     m_dirty = false;
   }
@@ -351,6 +376,7 @@ private:
     m_alloc->destroy(m_indices);
     m_alloc->destroy(m_frameInfo);
     m_alloc->destroy(m_bufferGrid);
+    m_alloc->destroy(m_bufferGridColors);
     m_alloc->destroy(m_texture);
   }
 
@@ -374,6 +400,10 @@ private:
                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     m_dutil->DBG_NAME(m_bufferGrid.buffer);
 
+    m_bufferGridColors = m_alloc->createBuffer(sizeof(glm::vec4) * m_settings.getTotalSize(), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_dutil->DBG_NAME(m_bufferGridColors.buffer);
+
     m_app->submitAndWaitTempCmdBuffer(cmd);
   }
 
@@ -381,6 +411,7 @@ private:
   {
     m_dsetRaster->addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL);
     m_dsetRaster->addBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
+    m_dsetRaster->addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL);
     m_dsetRaster->initLayout(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
     const VkPushConstantRange push_constant_ranges = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
@@ -390,10 +421,12 @@ private:
     // Descriptors writes
     m_descBufInfo = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_frameInfo.buffer, 0, VK_WHOLE_SIZE});
     m_descBufInfoGrid = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferGrid.buffer, 0, VK_WHOLE_SIZE});
+    m_descBufInfoGridColors = std::make_unique<VkDescriptorBufferInfo>(VkDescriptorBufferInfo{m_bufferGridColors.buffer, 0, VK_WHOLE_SIZE});
 
     m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 0, m_descBufInfo.get()));
     // m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, &m_texture.descriptor));
     m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 1, m_descBufInfoGrid.get()));
+    m_dsetRastWrites.emplace_back(m_dsetRaster->makeWrite(0, 2, m_descBufInfoGridColors.get()));
 
     VkPipelineRenderingCreateInfo prend_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
     prend_info.colorAttachmentCount    = 1;
@@ -438,11 +471,13 @@ private:
   nvvk::Buffer m_indices;   // Buffer of the indices
   nvvk::Buffer m_frameInfo;
   nvvk::Buffer m_bufferGrid;
+  nvvk::Buffer m_bufferGridColors;
 
   nvvkhl::Application*                    m_app = nullptr;
   std::vector<VkWriteDescriptorSet>       m_dsetRastWrites;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfo;
   std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoGrid;
+  std::unique_ptr<VkDescriptorBufferInfo> m_descBufInfoGridColors;
 
   Settings m_settings = {};
 
@@ -452,6 +487,7 @@ private:
   VkClearColorValue m_clearColor       = {{0.3F, 0.3F, 0.3F, 1.0F}};     // Clear color
 
   std::vector<float> voxel_grid;
+  std::vector<glm::vec4> color_grid;
 };
 
 int main(int argc, char** argv)

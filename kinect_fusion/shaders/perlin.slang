@@ -5,7 +5,10 @@
 #define WORKGROUP_SIZE 16
 RWStructuredBuffer<float> voxel_grid;
 RWStructuredBuffer<float> voxel_grid_weights;
+RWStructuredBuffer<float4> voxel_color;
+
 StructuredBuffer<float> depth_map;
+StructuredBuffer<float4> color_map;
 
 [[vk::push_constant]] ConstantBuffer<PerlinSettings> perlinSettings;
 
@@ -58,5 +61,9 @@ void computeMain(uint3 threadIdx : SV_DispatchThreadID)
 
         voxel_grid[index] = clamp(new_value, -TRUNC_DISTANCE, TRUNC_DISTANCE);
         voxel_grid_weights[index] = new_weight;
+
+        float4 old_color = voxel_color[index];
+        float4 src_color = color_map[pix_index];
+        voxel_color[index] = (old_color * old_weight + src_color) / new_weight;
     }
 }

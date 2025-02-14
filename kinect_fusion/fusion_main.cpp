@@ -96,11 +96,13 @@ void DumpToFile(const void *Data, const uint32_t voxel_size, const uint32_t size
 void run_gpu(VirtualSensor &sensor, const Setting& settings) {
     const size_t size = settings.size;
     const size_t byte_size = size * size * size * sizeof(float);
+    const size_t byte_size2 = size * size * size * sizeof(glm::vec4);
 
     VulkanWrapper vulkanWrapper{"VolumetricFusion"};
 
     auto &BufferVoxelGrid = vulkanWrapper.addBuffer(byte_size);
     auto &BufferVoxelGridWeights = vulkanWrapper.addBuffer(byte_size);
+    auto &BufferVoxelGridColors = vulkanWrapper.addBuffer(byte_size2);
 
     {
         auto P = BufferVoxelGrid.map<float>();
@@ -112,7 +114,13 @@ void run_gpu(VirtualSensor &sensor, const Setting& settings) {
         for (auto i = 0; i < size * size * size; ++i) { P[i] = 0.0f; }
     }
 
+    {
+        auto P = BufferVoxelGridColors.map<glm::vec4>();
+        for (auto i = 0; i < size * size * size; ++i) { P[i] = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f); }
+    }
+
     auto &BufferDepthMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(float));
+    auto &BufferColorMap = vulkanWrapper.addBuffer(640 * 480 * sizeof(glm::vec4));
 
     vulkanWrapper.createPipeline(sizeof(DH::PerlinSettings), comp_shd, "computeMain");
 
@@ -133,6 +141,15 @@ void run_gpu(VirtualSensor &sensor, const Setting& settings) {
 
         Matrix4f transform = sensor.GetTrajectory() * sensor.GetDepthExtrinsics();
 
+        {
+            auto Color = sensor.GetColorRGBX();
+
+            auto P = BufferColorMap.map<glm::vec4>();
+            for (auto i = 0; i < 640 * 480; ++i) {
+                P[i] = glm::vec4(Color[i * 4] / 255.0f, Color[i * 4 + 1]/ 255.0f, Color[i * 4 + 2]/ 255.0f, Color[i * 4 + 3]/ 255.0f);
+            }
+        }
+
         BufferDepthMap.fillWith(sensor.GetDepth());
 
         auto &CmdBuffer = vulkanWrapper.startCommandBuffer();
@@ -151,6 +168,9 @@ void run_gpu(VirtualSensor &sensor, const Setting& settings) {
         if (settings.every_step) {
             auto P = BufferVoxelGrid.map<float>();
             DumpToFile(P.data, size, byte_size, "sdf_values", count);
+
+            auto P2 = BufferVoxelGridColors.map<float>();
+            DumpToFile(P2.data, size, byte_size2, "sdf_colors", count);
         }
     }
 
@@ -160,21 +180,35 @@ void run_gpu(VirtualSensor &sensor, const Setting& settings) {
         auto P = BufferVoxelGrid.map<float>();
         DumpToFile(P.data, size, byte_size, "sdf_values", 0);
     }
+
+    {
+        auto P = BufferVoxelGridColors.map<float>();
+        DumpToFile(P.data, size, byte_size2, "sdf_colors", 0);
+    }
 }
 
 void run_cpu(VirtualSensor &sensor, const Setting& settings) {
     const size_t size = settings.size;
     const size_t full_size = size * size * size;
     const size_t byte_size = full_size  * sizeof(float);
+    const size_t byte_size2 = full_size  * sizeof(glm::vec4);
 
     auto voxel_grid = std::make_unique<float[]>(full_size);
     auto voxel_grid_weights = std::make_unique<float[]>(full_size);
+    auto voxel_grid_color = std::make_unique<glm::vec4[]>(full_size);
+
+    auto color_map = std::make_unique<glm::vec4[]>(640 * 480);
 
     double sum = 0.0;
     int count = 0;
 
     while (sensor.ProcessNextFrame()) {
         Stopwatch watch{};
+
+        auto Color = sensor.GetColorRGBX();
+        for (auto i = 0; i < 640 * 480; ++i) {
+            color_map[i] = glm::vec4(Color[i * 4] / 255.0f, Color[i * 4 + 1]/ 255.0f, Color[i * 4 + 2]/ 255.0f, Color[i * 4 + 3]/ 255.0f);
+        }
 
         float* depthMap = sensor.GetDepth();
         Matrix3f depthIntrinsics = sensor.GetDepthIntrinsics();
@@ -223,6 +257,10 @@ void run_cpu(VirtualSensor &sensor, const Setting& settings) {
 
                         voxel_grid[index] = (new_value > TRUNC_DISTANCE)? TRUNC_DISTANCE : (new_value < -TRUNC_DISTANCE)? -TRUNC_DISTANCE: new_value;
                         voxel_grid_weights[index] = new_weight;
+
+                        glm::vec4 old_color = voxel_grid_color[index];
+                        glm::vec4 src_color = color_map[depth_index];
+                        voxel_grid_color[index] = (old_color * old_weight + src_color) / new_weight;
                     }
                 }
             }
@@ -233,11 +271,13 @@ void run_cpu(VirtualSensor &sensor, const Setting& settings) {
 
         if (settings.every_step) {
             DumpToFile(voxel_grid.get(), size, byte_size, "sdf_values", count);
+            DumpToFile(voxel_grid_color.get(), size, byte_size2, "sdf_colors", count);
         }
     }
 
     std::cout << "Average runtime: " << sum/count << std::endl;
     DumpToFile(voxel_grid.get(), size, byte_size, "sdf_values", 0);
+    DumpToFile(voxel_grid_color.get(), size, byte_size2, "sdf_colors", 0);
 }
 
 #ifdef CUDA_AVAILABLE
@@ -256,6 +296,10 @@ glm::mat4 hack_GetTransform(VirtualSensor *sensor) {
     transform_[0] *= -1;
 
     return transform_;
+}
+
+BYTE* hack_GetColor(VirtualSensor *sensor) {
+    return sensor->GetColorRGBX();
 }
 
 float* hack_GetDepth(VirtualSensor *sensor) {
