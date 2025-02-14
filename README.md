@@ -47,3 +47,26 @@ To plot the results call the plotting script:
 ```
 python plots/plot_vol.py
 ```
+
+## Important Source Files and Folder 
+
+### kinect_fusion/helper/vulkan_helper.h
+Contains a wrapper class for vulkan to easily manage the required resources using RAII.
+
+### kinect_fusion/shader/perlin.slang
+Contains the compute shader for the volumetric integration. This is both compiled to CUDA and to SPIR-V for usage with Vulkan.
+
+### kinect_fusion/shader/raster.slang
+Rendering code using rayMarching. Is only compiled to SPIR-V.
+
+### kinect_fusion/fusion.cu
+CUDA wrapper that calls the generated CUDA code.
+
+### kinect_fusion/fusion_main.cpp
+Main cpp file for the integration_exe, contains the Vulkan wrapper and the CPU version of the volumetric integration.
+
+### kinect_fusion/viewer.cpp
+Code for the viewer application to interactively render the scene in a GUI (calls the raster.slang shader)
+
+# Source
+The wrapper nvpro_core files, the project structure and the rendering code are based on the NVIDIA [vk_mini_samples](https://github.com/nvpro-samples/vk_mini_samples/tree/main) 
